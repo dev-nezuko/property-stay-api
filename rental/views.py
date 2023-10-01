@@ -8,7 +8,7 @@ from bnbu_constants.utility import (validate_file_type, file_to_df, validate_df,
 from rest_framework.response import Response
 import bnbu_constants.constants as constants
 from django.db.models import Max
-from datetime import datetime, timedelta
+from datetime import datetime
 from django.db.models import Q
 from rest_framework.pagination import PageNumberPagination
 from .permissions import IsSpecificUserType, IsAdminOrOwnData
@@ -17,7 +17,38 @@ from rental.tasks import process_rental_properties_task
 import csv
 from celery.result import AsyncResult
 from django.core.cache import cache
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
+from decimal import Decimal, InvalidOperation
+
+CSV_HEADER = [
+    "Date", "Batch Id", "Location", "Rent", "Bedrooms", "Bathrooms", "Square Feet", "Link", "Adr",
+    "Utilities", "Estimated Profit", "Estimated Earnings", "Yearly Rent Cost", "Occupancy Rate",
+    "Zillow Property Status",
+]
+FILTER_DATE_FORMAT = '%B %d, %Y'
+
+
+class _EchoBuffer:
+    """File-like sink that hands each csv.writer row straight back for streaming."""
+
+    def write(self, value):
+        return value
+
+
+def _csv_safe(value):
+    # Spreadsheet apps execute cells that start with these characters as formulas.
+    text = "" if value is None else str(value)
+    return "'" + text if text[:1] in ("=", "+", "-", "@") else text
+
+
+def _parse_filter_date(value, field):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, FILTER_DATE_FORMAT).date()
+    except (TypeError, ValueError):
+        raise ValidationError({field: 'Use "Month day, year" (e.g., December 3, 2024).'})
+
 
 class RentalPropertyPagination(PageNumberPagination):
     page_size = 10  # Default page size
@@ -173,196 +204,71 @@ class RentalPropertyViewSet(viewsets.ModelViewSet):
         return paginator.get_paginated_response(serializer.data)
 
 
+    def _filter_properties(self, params):
+        """Apply the shared profit/status/batch/date filters used by the list and CSV export."""
+        query = Q()
+        for param, lookup in (
+            ("min_profit", "monthly_estimated_profit__gte"),
+            ("max_profit", "monthly_estimated_profit__lte"),
+            ("batch_id", "batch_id"),
+        ):
+            value = params.get(param)
+            if value is None or value == "":
+                continue
+            try:
+                query &= Q(**{lookup: Decimal(str(value))})
+            except InvalidOperation:
+                raise ValidationError({param: "Must be a number."})
+        if params.get("status"):
+            query &= Q(property_status=params["status"])
+        start_date = _parse_filter_date(params.get("start_date"), "start_date")
+        if start_date:
+            query &= Q(created_at__date__gte=start_date)
+        end_date = _parse_filter_date(params.get("end_date"), "end_date")
+        if end_date:
+            query &= Q(created_at__date__lte=end_date)
+        return self.get_queryset().filter(query).order_by('-created_at')
+
     @action(detail=False, methods=['post'], url_path='filtered-list')
     def filtered_list(self, request):
-        filters = request.data
-        min_profit = filters.get("min_profit")
-        max_profit = filters.get("max_profit")
-        status = filters.get("status")
-        batch_id = filters.get("batch_id")
-        start_date = filters.get("start_date")
-        end_date = filters.get("end_date")
+        rental_properties = self._filter_properties(request.data)
+        all_batch_ids = sorted(set(rental_properties.values_list('batch_id', flat=True)))
 
-        rental_properties = self.get_queryset()  # Initialize the queryset
-        # print( '======')
-        # print(rental_properties, '======')
-        # Build the query
-        query = Q()
-
-        # Apply filters only if they are provided
-        if min_profit is not None:
-            query &= Q(monthly_estimated_profit__gte=min_profit)
-        if max_profit is not None:
-            query &= Q(monthly_estimated_profit__lte=max_profit)
-        if status is not None:
-            query &= Q(property_status=status)
-        if batch_id is not None:
-            query &= Q(batch_id=batch_id)
-
-        # Handle start_date
-        if start_date:
-            try:
-                start_date = datetime.strptime(start_date, '%B %d, %Y').date()
-                query &= Q(created_at__gte=start_date)
-            except ValueError:
-                return Response({'detail': 'Invalid start date format. Use "Month day, year" (e.g., December 3, 2024).'},
-                                status=status.HTTP_400_BAD_REQUEST)
-
-        # Handle end_date
-        if end_date:
-            try:
-                end_date = datetime.strptime(end_date, '%B %d, %Y').date()
-                end_date = end_date + timedelta(days=1)  # Make the end_date exclusive
-                query &= Q(created_at__lte=end_date)
-            except ValueError:
-                return Response({'detail': 'Invalid end date format. Use "Month day, year" (e.g., December 3, 2024).'},
-                                status=status.HTTP_400_BAD_REQUEST)
-        else:
-            # end_date = datetime.now().date()
-            end_date_str = datetime.now().strftime('%B %d, %Y')  # Convert current date to string
-            end_date = datetime.strptime(end_date_str, '%B %d, %Y').date()  # Parse string back to date
-
-        # If any filters are provided, apply them; otherwise, return all records
-        if query != Q():  # Only apply filtering if there are valid filters
-            rental_properties = rental_properties.filter(query).order_by('-created_at')
-        else:
-            rental_properties = rental_properties.order_by('-created_at')  # No filters, return all
-
-        if self.request.user.is_staff:
-            rental_properties = rental_properties.order_by('-created_at')
-        else:
-            rental_properties = rental_properties.filter(user_id=self.request.user.id).order_by('-created_at')
-
-        list_of_batch_ids = set()
-        for property in rental_properties:
-            list_of_batch_ids.add(property.batch_id)
-        all_batch_ids = list(list_of_batch_ids)
-
-        # Paginate the results
         paginator = RentalPropertyPagination()
         paginated_properties = paginator.paginate_queryset(rental_properties, request)
-
-        # Serialize the results
         serializer = self.get_serializer(paginated_properties, many=True)
-
-        # Include max_batch_id in the response
-        response_data = {
+        return paginator.get_paginated_response({
             'all_batch_ids': all_batch_ids,
             'properties': serializer.data,
-        }
-
-        return paginator.get_paginated_response(response_data)
+        })
 
     @action(detail=False, methods=['get'], url_path='download-csv')
     def download_csv(self, request):
-        filters = request.query_params
-        min_profit = filters.get("min_profit")
-        max_profit = filters.get("max_profit")
-        status = filters.get("status")
-        batch_id = filters.get("batch_id")
-        start_date = filters.get("start_date")
-        end_date = filters.get("end_date")
+        rental_properties = self._filter_properties(request.query_params)
 
-        rental_properties = self.get_queryset()  # Initialize the queryset
-        query = Q()
-
-        # Apply filters only if they are provided
-        if min_profit is not None:
-            query &= Q(monthly_estimated_profit__gte=min_profit)
-        if max_profit is not None:
-            query &= Q(monthly_estimated_profit__lte=max_profit)
-        if status is not None:
-            query &= Q(property_status=status)
-        if batch_id is not None:
-            query &= Q(batch_id=batch_id)
-
-        if start_date:
-            try:
-                start_date = datetime.strptime(start_date, '%B %d, %Y').date()
-                query &= Q(created_at__gte=start_date)
-            except ValueError:
-                return Response({'detail': 'Invalid start date format. Use "Month day, year" (e.g., December 3, 2024).'},
-                                status=status.HTTP_400_BAD_REQUEST)
-
-        if end_date:
-            try:
-                end_date = datetime.strptime(end_date, '%B %d, %Y').date()
-                end_date = end_date + timedelta(days=1)  # Make the end_date exclusive
-                query &= Q(created_at__lte=end_date)
-            except ValueError:
-                return Response({'detail': 'Invalid end date format. Use "Month day, year" (e.g., December 3, 2024).'},
-                                status=status.HTTP_400_BAD_REQUEST)
-
-        # Apply filters if any
-        if query != Q():
-            rental_properties = rental_properties.filter(query)
-        else:
-            rental_properties = rental_properties # No filters, return all
-
-        if self.request.user.is_staff:
-            rental_properties = rental_properties.order_by('-created_at')
-        else:
-            rental_properties = rental_properties.filter(user_id=self.request.user.id).order_by('-created_at')
-
-
-        # Prepare the CSV response
-        response = StreamingHttpResponse(content_type='text/csv')
-        response['Content-Disposition'] = 'attachment; filename="rental_properties.csv"'
-
-        # Define a generator to stream the CSV data
         def generate_csv():
-            # Yield the header
-            yield ",".join([
-                "Date",
-                "Batch Id",
-                "Location",
-                "Rent",
-                "Bedrooms",
-                "Bathrooms",
-                "Square Feet",
-                "Link",
-                "Adr",
-                "Utilities",
-                "Estimated Profit",
-                "Estimated Earnings",
-                "Yearly Rent Cost",
-                "Occupancy Rate",
-                "Zillow Property Status"
-            ]) + "\n"
+            buffer = _EchoBuffer()
+            writer = csv.writer(buffer)
+            yield writer.writerow(CSV_HEADER)
+            for prop in rental_properties.iterator():
+                yield writer.writerow([
+                    prop.created_at.strftime('%B %d, %Y') if prop.created_at else "",
+                    prop.batch_id,
+                    _csv_safe(prop.location),
+                    prop.rent,
+                    prop.no_of_bedrooms,
+                    prop.no_of_bathrooms,
+                    prop.square_feet,
+                    _csv_safe(prop.property_zillow_link),
+                    prop.adr,
+                    prop.utilities,
+                    prop.monthly_estimated_profit,
+                    prop.yearly_projected_revenue,
+                    prop.yearly_rent_cost_util,
+                    prop.occupancy_rate,
+                    prop.property_status,
+                ])
 
-            # Yield data rows one by one
-            for property in rental_properties:
-                # Escape the location field if necessary
-                location = property.location
-                # Enclose in quotes if there are commas or special characters (like '*', '#', etc.)
-                if ',' in location or '"' in location or '*' in location or '#' in location:
-                    location = '"{}"'.format(location.replace('"', '""'))
-
-                # Handle the date field
-                date = property.created_at.strftime('%B %d, %Y') if property.created_at else ""
-                # Enclose in quotes if there are commas or special characters (like ',')
-                if ',' in date or '"' in date:
-                    date = '"{}"'.format(date.replace('"', '""'))
-
-                yield ",".join([
-                    date,
-                    str(property.batch_id),
-                    location,
-                    str(property.rent),
-                    str(property.no_of_bedrooms),
-                    str(property.no_of_bathrooms),
-                    str(property.square_feet),
-                    property.property_zillow_link,
-                    str(property.adr),
-                    str(property.utilities),
-                    str(property.monthly_estimated_profit),
-                    str(property.yearly_projected_revenue),
-                    str(property.yearly_rent_cost_util),
-                    str(property.occupancy_rate),
-                    property.property_status,
-                ]) + "\n"
-
-        # Stream the CSV data
-        response.streaming_content = generate_csv()
-
+        response = StreamingHttpResponse(generate_csv(), content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="rental_properties.csv"'
         return response
