@@ -10,7 +10,6 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
-import logging
 import os
 import json
 import cloudinary
@@ -18,18 +17,11 @@ from dotenv import load_dotenv
 from pathlib import Path
 from datetime import timedelta
 import dj_database_url
-import environ
-
-# Initialize environment variables
-env = environ.Env()
-environ.Env.read_env()
 
 load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-STATIC_ROOT = BASE_DIR / "staticfiles"
-STATIC_URL = "/static/"
 
 CLICKUP_BASE_URL = os.getenv("CLICKUP_URL")  # Base URL with placeholder
 LIST_ID = os.getenv("LIST_ID")  # Load the list ID
@@ -42,10 +34,6 @@ ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 APPROVED = os.getenv("APPROVED")
 ZILLOW_CUSTOM_ID = os.getenv("ZILLOW_CUSTOM_ID")
 PROPERTY_STATUS_CUSTOM_ID = os.getenv("PROPERTY_STATUS_CUSTOM_ID")
-# Media files
-# MEDIA_ROOT = os.path.join(BASE_DIR, "documents")
-# MEDIA_URL = "/documents/"
-
 # Determine the environment: development, staging
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 
@@ -57,13 +45,7 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 
 DEBUG = os.getenv("DEBUG", "False") == "True"
 
-# ALLOWED_HOSTS = ["staging-tool-bnb-488e79ceb030.herokuapp.com"]
-
-# ALLOWED_HOSTS setting
-if ENVIRONMENT in ["staging", "production"]:
-    ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "localhost").split(",")
-else:
-    ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
+ALLOWED_HOSTS = [host.strip() for host in os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if host.strip()]
 
 
 # Application definition
@@ -80,12 +62,10 @@ INSTALLED_APPS = [
     "django_filters",
     "corsheaders",
     "drf_yasg",
-    # "accounts.apps.AccountsConfig",
     "accounts",
     "lease",
     "regulations",
-    # 'rental.apps.RentalConfig',
-    'rental',
+    "rental",
 ]
 AUTH_USER_MODEL = "accounts.CustomUser"
 
@@ -100,7 +80,10 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
 ]
-STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+}
 ROOT_URLCONF = "bnbu_backend_api.urls"
 
 TEMPLATES = [
@@ -124,13 +107,6 @@ WSGI_APPLICATION = "bnbu_backend_api.wsgi.application"
 
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
-
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'django.db.backends.sqlite3',
-#         'NAME': BASE_DIR / 'db.sqlite3',
-#     }
-# }
 
 # Database configuration
 if ENVIRONMENT in ["staging", "production"]:
@@ -183,7 +159,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
 STATIC_URL = "/static/"
-STATICFILES_DIRS = [BASE_DIR / "static"]
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
 
 # Default primary key field type
@@ -196,7 +172,7 @@ REST_FRAMEWORK = {
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
-    "PAGE_SIZE": 10,  # Set the default page size (number of users per page)
+    "PAGE_SIZE": 10,
 }
 
 SIMPLE_JWT = {
@@ -227,7 +203,6 @@ CORS_ALLOW_HEADERS = [
 # and unlike the old custom backend it refuses inactive accounts.
 AUTHENTICATION_BACKENDS = ["django.contrib.auth.backends.ModelBackend"]
 
-# Use the console email backend for development to print emails to the console instead of sending them.
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -238,32 +213,26 @@ CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
         "LOCATION": os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
-
     }
 }
 
-
-# Step 1: Configure logging
-logging.basicConfig(
-    level=logging.INFO,  # Set to DEBUG for more detailed logs
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler("lease_analysis.log"),  # Logs saved to a file
-        logging.StreamHandler(),  # Logs also shown in the console
-    ],
-)
-
-# Step 2: Create a logger instance
-logger = logging.getLogger(__name__)
+# Console-only logging: the previous FileHandler wrote lease_analysis.log into the
+# working directory at import time, which fails on read-only container filesystems.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {"plain": {"format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s"}},
+    "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "plain"}},
+    "root": {"handlers": ["console"], "level": os.getenv("LOG_LEVEL", "INFO")},
+}
 
 ENABLE_DOCUMENT_UPLOADS = os.getenv("ENABLE_DOCUMENT_UPLOADS", "0") == "1"
 
 
-# Cloudinary configuration from .env file
 cloudinary.config(
-    cloud_name=env('CLOUDINARY_CLOUD_NAME', default=''),
-    api_key=env('CLOUDINARY_API_KEY', default=''),
-    api_secret=env('CLOUDINARY_API_SECRET', default=''),
+    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME", ""),
+    api_key=os.getenv("CLOUDINARY_API_KEY", ""),
+    api_secret=os.getenv("CLOUDINARY_API_SECRET", ""),
 )
 
 FILE_UPLOAD_MAX_MEMORY_SIZE = 52428800
