@@ -15,6 +15,10 @@ from .permissions import IsSpecificUserType, IsAdminOrOwnData
 from rest_framework.permissions import IsAuthenticated
 from rental.tasks import process_rental_properties_task
 import csv
+import zipfile
+
+import pandas as pd
+from openpyxl.utils.exceptions import InvalidFileException
 from celery.result import AsyncResult
 from django.core.cache import cache
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -26,6 +30,7 @@ CSV_HEADER = [
     "Zillow Property Status",
 ]
 FILTER_DATE_FORMAT = '%B %d, %Y'
+BATCH_SEQUENCE_KEY = 'rental-batch-sequence'
 
 
 class _EchoBuffer:
@@ -39,6 +44,19 @@ def _csv_safe(value):
     # Spreadsheet apps execute cells that start with these characters as formulas.
     text = "" if value is None else str(value)
     return "'" + text if text[:1] in ("=", "+", "-", "@") else text
+
+
+def _next_batch_id():
+    """Reserve a batch number atomically.
+
+    Rows are only written once the Celery task runs, so reading Max(batch_id) gave two uploads
+    made in quick succession the same batch. The counter lives in the shared (Redis) cache and
+    is re-seeded from the database if the key is ever evicted.
+    """
+    if cache.get(BATCH_SEQUENCE_KEY) is None:
+        cache.add(BATCH_SEQUENCE_KEY, RentalProperty.objects.aggregate(Max('batch_id'))['batch_id__max'] or 0,
+                  timeout=None)
+    return cache.incr(BATCH_SEQUENCE_KEY)
 
 
 def _parse_filter_date(value, field):
@@ -72,12 +90,12 @@ class RentalPropertyPagination(PageNumberPagination):
         # Ensure the page size does not exceed the maximum page size
         return max(1, min(page_size, self.max_page_size))
 
+
 class RentalPropertyViewSet(viewsets.ModelViewSet):
     queryset = RentalProperty.objects.all().order_by('-created_at')
     permission_classes = [IsAuthenticated, IsSpecificUserType, IsAdminOrOwnData]
     serializer_class = RentalPropertySerializer
     pagination_class = RentalPropertyPagination
-
 
     def get_queryset(self):
         rows = RentalProperty.objects.all().order_by('-created_at')
@@ -93,39 +111,43 @@ class RentalPropertyViewSet(viewsets.ModelViewSet):
             return Response({"success": False, "message": "File not found"}, status=status.HTTP_400_BAD_REQUEST)
 
         if not validate_file_type(file):
-            return Response({"success": False, "message": f"Invalid file type"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"success": False, "message": "Invalid file type; upload .csv or .xlsx"},
+                            status=status.HTTP_400_BAD_REQUEST)
 
-        df = file_to_df(file)
+        try:
+            df = file_to_df(file)
+        except (ValueError, pd.errors.ParserError, zipfile.BadZipFile, InvalidFileException):
+            return Response({"success": False, "message": "File could not be read as CSV or XLSX"},
+                            status=status.HTTP_400_BAD_REQUEST)
         if df.empty:
             return Response({"success": False, "message": "File contains no data"}, status=status.HTTP_400_BAD_REQUEST)
 
         missing_cols = validate_df(df)
         if missing_cols:
-            return Response({"success": False, "message": f"Missing columns: {missing_cols}"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"success": False, "message": f"Missing columns: {', '.join(sorted(missing_cols))}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         normalize_column(df, "Ba")
         normalize_column(df, "Br")
         normalize_column(df, "Sq. ft.")
         df["Price"] = df["Price"].apply(clean_price)
 
-        latest_batch = RentalProperty.objects.aggregate(Max('batch_id'))
-        latest_batch_id = latest_batch['batch_id__max'] or 0
-        new_batch_id = latest_batch_id + 1
-
+        new_batch_id = _next_batch_id()
         df = normalize_df(df)
-
-        # Add user information to the data
-        user = request.user
         context = {
-            'user': user.id,
+            'user': request.user.id,
             'new_batch_id': new_batch_id
         }
 
-        # Trigger Celery task
         task = process_rental_properties_task.delay(df.to_json(orient='records'), context)
         cache.set('rental-task-owner:' + task.id, request.user.pk, timeout=86400)
 
-        return Response({"success": True, "message": f"Batch {new_batch_id} processing started", "task_id": task.id}, status=status.HTTP_202_ACCEPTED)
+        return Response(
+            {"success": True, "message": f"Batch {new_batch_id} processing started", "task_id": task.id},
+            status=status.HTTP_202_ACCEPTED
+        )
 
     @action(detail=False, methods=['get'], url_path='task-result')
     def get_task_result(self, request):
@@ -138,11 +160,20 @@ class RentalPropertyViewSet(viewsets.ModelViewSet):
         if task_result.state == "PENDING":
             return Response({"success": False, "message": "Task is still pending"}, status=status.HTTP_202_ACCEPTED)
         elif task_result.state == "FAILURE":
-            return Response({"success": False, "message": "Task failed", "error": str(task_result.result)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"success": False, "message": "Task failed", "error": str(task_result.result)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
         elif task_result.state == "SUCCESS":
-            return Response({"success": True, "message": "Task completed", "result": task_result.result}, status=status.HTTP_200_OK)
+            return Response(
+                {"success": True, "message": "Task completed", "result": task_result.result},
+                status=status.HTTP_200_OK
+            )
         else:
-            return Response({"success": True, "message": f"Task is {task_result.state}", "result": task_result.result}, status=status.HTTP_200_OK)
+            return Response(
+                {"success": True, "message": f"Task is {task_result.state}", "result": task_result.result},
+                status=status.HTTP_200_OK
+            )
 
     @action(detail=False, methods=['get'], url_path='task-progress')
     def task_progress(self, request):
@@ -202,7 +233,6 @@ class RentalPropertyViewSet(viewsets.ModelViewSet):
 
         # Return paginated response
         return paginator.get_paginated_response(serializer.data)
-
 
     def _filter_properties(self, params):
         """Apply the shared profit/status/batch/date filters used by the list and CSV export."""

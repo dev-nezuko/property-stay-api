@@ -1,16 +1,20 @@
 import bnbu_constants.constants as constants
 import pandas as pd
 from django.conf import settings
+import logging
+
 import requests
 
+logger = logging.getLogger(__name__)
+AIRDNA_ATTEMPTS = 5
+
+
 def validate_file_type(file):
-    if not file.name.endswith(tuple(constants.VALID_FILE_EXTENSION)):
-        return False
-    return True
+    return file.name.lower().endswith(tuple(constants.VALID_FILE_EXTENSION))
 
 
 def file_to_df(file):
-    if file.name.endswith(".csv"):
+    if file.name.lower().endswith(".csv"):
         df = pd.read_csv(file)
     else:
         df = pd.read_excel(file)
@@ -23,13 +27,15 @@ def validate_df(df):
         missing_cols = set(constants.REQUIRED_COLS) - set(df.columns)
     return missing_cols
 
+
 def normalize_column(df, col_name):
-    # df[col_name] = df[col_name].astype(str).str.extract('(\d+)').astype(float)
     df[col_name] = df[col_name].astype(str).str.extract(r"(\d+)").astype(float)
+
 
 def normalize_df(df):
     df = df.dropna(subset=constants.IMP_COLS)
     return df
+
 
 def clean_price(price):
     try:
@@ -45,28 +51,24 @@ def process_airdna_api(bulk_queries):
     }
     payload = {"queries": bulk_queries}
 
-    retry_count = 5
-    retries = 0
-
-    print("=====> ", bulk_queries)
-    while retry_count > retries:
+    for attempt in range(1, AIRDNA_ATTEMPTS + 1):
         try:
-            response = requests.post(settings.AIRDNA_URL, json=payload, headers=headers)
+            response = requests.post(settings.AIRDNA_URL, json=payload, headers=headers, timeout=60)
             response.raise_for_status()
-            # return response.json()["payload"]["results"]
-            results = response.json()["payload"]["results"]
-            # results = response.json().get("payload", {}).get("results", [])
-            if not results:
-                raise ValueError("No results returned from API.")
-            return results
-        except requests.exceptions.RequestException as e:
-            print(f"Request error: {e}")
-            retries += 1
+        except requests.exceptions.RequestException as error:
+            logger.warning("AirDNA request attempt %d/%d failed: %s", attempt, AIRDNA_ATTEMPTS, error)
+            continue
+        results = response.json().get("payload", {}).get("results")
+        if not results:
+            raise ValueError("No results returned from AirDNA.")
+        return results
 
-    raise ValueError("AirDNA API Request Fails !!!")
+    raise ValueError(f"AirDNA request failed after {AIRDNA_ATTEMPTS} attempts.")
+
 
 def calculate_utilities(no_of_bedroom):
     return no_of_bedroom * 2000
+
 
 def calculate_monthly_profit(annual_revenue, monthly_rent, no_of_bedroom):
     if not annual_revenue or not monthly_rent or not no_of_bedroom:

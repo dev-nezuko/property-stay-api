@@ -11,7 +11,8 @@ RENTAL_PROPERY_STATUS_CHOICES = [
 ]
 
 
-VALID_FILE_EXTENSION = [".xls", ".xlsx", ".csv"]
+# Legacy .xls would need xlrd, which is not installed; openpyxl reads .xlsx.
+VALID_FILE_EXTENSION = [".xlsx", ".csv"]
 REQUIRED_COLS = ["Location", "Price", "Sq. ft.", "Ba", "Br", "Link"]
 IMP_COLS = ['Ba', 'Br', 'Price', 'Link']
 
