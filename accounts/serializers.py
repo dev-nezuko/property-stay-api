@@ -1,4 +1,3 @@
-# bnbu_backend_api/account/serializers.py
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
@@ -7,6 +6,7 @@ import secrets
 
 # Get the CustomUser model
 CustomUser = get_user_model()
+
 
 class UserSerializer(serializers.ModelSerializer):
     """
@@ -36,14 +36,11 @@ class UserSerializer(serializers.ModelSerializer):
         user.save()
         return user
 
-# class ClientSerializer(UserSerializer):
-#     class Meta(UserSerializer.Meta):
-#         fields = ['id', 'email', 'user_type']  # Limit fields for clients
 
 class CustomerSerializer(UserSerializer):
     class Meta(UserSerializer.Meta):
         read_only_fields = ['id', 'is_active', 'is_first_login', 'user_type', 'client']
-        fields = ['id', 'email', 'first_name', 'last_name', 'user_type', 'is_active', 'is_first_login', 'client']  # Include client field for customers
+        fields = ['id', 'email', 'first_name', 'last_name', 'user_type', 'is_active', 'is_first_login', 'client']
 
 
 class PasswordChangeSerializer(serializers.Serializer):
@@ -69,7 +66,9 @@ class PasswordChangeSerializer(serializers.Serializer):
             raise serializers.ValidationError({"old_password": "Old password is incorrect."})
 
         if data['new_password'] != data['confirm_new_password']:
-            raise serializers.ValidationError({"confirm_new_password": "New password and confirm password do not match."})
+            raise serializers.ValidationError(
+                {"confirm_new_password": "New password and confirm password do not match."}
+            )
 
         return data
 
@@ -79,18 +78,6 @@ class PasswordChangeSerializer(serializers.Serializer):
         user.set_password(self.validated_data['new_password'])
         user.save()
         return user
-
-class PasswordResetSerializer(serializers.Serializer):
-    """
-    Serializer for password reset requests.
-    """
-    email = serializers.EmailField(required=True)
-
-    def validate_email(self, value):
-        """Validate the email for existing users."""
-        if not CustomUser.objects.filter(email=value).exists():
-            raise serializers.ValidationError("User with this email does not exist.")
-        return value
 
 
 class FirstTimePasswordUpdateSerializer(serializers.ModelSerializer):
@@ -125,6 +112,3 @@ class FirstTimePasswordUpdateSerializer(serializers.ModelSerializer):
         user.is_first_login = False  # Mark user as not first login
         user.save()
         return user
-
-
-

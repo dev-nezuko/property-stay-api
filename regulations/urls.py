@@ -10,4 +10,3 @@ router.register(r'regulations', RegulationsViewSet, basename='regulations')
 urlpatterns = [
     path('', include(router.urls)),
 ]
-

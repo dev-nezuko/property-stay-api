@@ -2,11 +2,13 @@
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 
+
 class CustomUserManager(BaseUserManager):
     """
     Custom user manager where email is the unique identifier
     for authentication instead of usernames.
     """
+
     def create_user(self, email, password=None, **extra_fields):
         if not email:
             raise ValueError('The Email field must be set')
@@ -26,6 +28,7 @@ class CustomUserManager(BaseUserManager):
             raise ValueError('Superuser must have is_superuser=True.')
 
         return self.create_user(email, password, **extra_fields)
+
 
 class CustomUser(AbstractUser):
     USER_TYPE_CHOICES = (
@@ -63,4 +66,3 @@ class CustomUser(AbstractUser):
 
     def __str__(self):
         return self.email
-

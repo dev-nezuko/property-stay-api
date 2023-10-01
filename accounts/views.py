@@ -1,23 +1,16 @@
-# bnbu_backend_api/account/views.py
+from django.contrib.auth import logout
+from django.shortcuts import get_object_or_404
 from rest_framework import status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.exceptions import PermissionDenied
+from rest_framework.generics import RetrieveUpdateAPIView, RetrieveUpdateDestroyAPIView
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.generics import RetrieveUpdateAPIView, RetrieveUpdateDestroyAPIView
-from django.contrib.auth import authenticate, login, logout
-from django.contrib.auth.forms import PasswordChangeForm
-from rest_framework.decorators import api_view, permission_classes
-from django.contrib.auth.models import update_last_login
-from django.contrib.auth.tokens import default_token_generator
-from django.core.mail import send_mail
-from django.utils.http import urlsafe_base64_encode
-from django.utils.encoding import force_bytes
-from .serializers import FirstTimePasswordUpdateSerializer, UserSerializer, PasswordChangeSerializer, PasswordResetSerializer,CustomerSerializer
+
 from .models import CustomUser
-from django.contrib.auth.hashers import make_password
-from rest_framework.pagination import PageNumberPagination
-from django.shortcuts import get_object_or_404
-from rest_framework.exceptions import PermissionDenied
+from .serializers import CustomerSerializer, FirstTimePasswordUpdateSerializer, PasswordChangeSerializer, UserSerializer
 
 
 class UserListCreateView(APIView):
@@ -44,18 +37,20 @@ class UserListCreateView(APIView):
 
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+
 class UserDetailView(RetrieveUpdateDestroyAPIView):
     queryset = CustomUser.objects.all()
     serializer_class = UserSerializer
     permission_classes = [IsAdminUser]
 
     def put(self, request, *args, **kwargs):
-        response = super().put(request, *args, **kwargs)
+        super().put(request, *args, **kwargs)
         return Response({"message": "User updated successfully"}, status=status.HTTP_200_OK)
 
     def delete(self, request, *args, **kwargs):
-        response = super().delete(request, *args, **kwargs)
+        super().delete(request, *args, **kwargs)
         return Response({"message": "User deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
+
 
 class ClientListCreateView(APIView):
     permission_classes = [IsAdminUser]
@@ -72,13 +67,14 @@ class ClientListCreateView(APIView):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
 class ClientDetailView(RetrieveUpdateDestroyAPIView):
     queryset = CustomUser.objects.filter(user_type='client')
     serializer_class = UserSerializer
     permission_classes = [IsAdminUser]
 
     def put(self, request, *args, **kwargs):
-        response = super().put(request, *args, **kwargs)
+        super().put(request, *args, **kwargs)
         return Response({"message": "Client updated successfully"}, status=status.HTTP_200_OK)
 
     def delete(self, request, *args, **kwargs):
@@ -94,7 +90,10 @@ class ClientDetailView(RetrieveUpdateDestroyAPIView):
         # Now delete the client
         self.perform_destroy(client)
 
-        return Response({"message": "Client and associated customers deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
+        return Response(
+            {"message": "Client and associated customers deleted successfully"}, status=status.HTTP_204_NO_CONTENT
+        )
+
 
 class CustomerListView(APIView):
     permission_classes = [IsAuthenticated]
@@ -115,6 +114,7 @@ class CustomerListView(APIView):
         # Use CustomerSerializer to serialize the customer data
         serializer = CustomerSerializer(customers, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
 
 class CustomerCreateView(APIView):
     permission_classes = [IsAuthenticated]
@@ -138,13 +138,16 @@ class CustomerCreateView(APIView):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
 class CustomerDetailView(RetrieveUpdateDestroyAPIView):
     serializer_class = CustomerSerializer  # Use CustomerSerializer here
     permission_classes = [IsAuthenticated]
 
     def get_object(self):
         # Fetch customer using primary key (pk)
-        customer = get_object_or_404(CustomUser, pk=self.kwargs['pk'], client_id=self.kwargs['client_id'], user_type='customer')
+        customer = get_object_or_404(
+            CustomUser, pk=self.kwargs['pk'], client_id=self.kwargs['client_id'], user_type='customer'
+        )
         # Allow admins to access any customer
         if self.request.user.is_staff:
             return customer
@@ -171,6 +174,7 @@ class CustomerDetailView(RetrieveUpdateDestroyAPIView):
         # Return a success message for deletion
         return Response({"message": "Customer deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
 
+
 class FirstTimePasswordUpdateView(RetrieveUpdateAPIView):
     serializer_class = FirstTimePasswordUpdateSerializer  # Use the new serializer
     permission_classes = [IsAuthenticated]
@@ -185,10 +189,15 @@ class FirstTimePasswordUpdateView(RetrieveUpdateAPIView):
 
         # Ensure the authenticated user can only change their own password
         if request.user != user:
-            return Response({"error": "You are not allowed to update this user's password."}, status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"error": "You are not allowed to update this user's password."}, status=status.HTTP_403_FORBIDDEN
+            )
 
         if not user.is_first_login:
-            return Response({"error": "Password update not allowed. This is not your first login."}, status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"error": "Password update not allowed. This is not your first login."},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
         # Use the serializer to validate and save the new password
         serializer = self.get_serializer(user, data=request.data)
@@ -196,6 +205,7 @@ class FirstTimePasswordUpdateView(RetrieveUpdateAPIView):
         serializer.save()
 
         return Response({"message": "Password updated successfully"}, status=status.HTTP_200_OK)
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -208,10 +218,15 @@ def password_change(request):
 
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
 @api_view(['POST'])
 def password_reset(request):
     # No reset confirmation endpoint or verified delivery flow exists yet.
-    return Response({"detail": "Password reset is unavailable until secure delivery and confirmation are configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    return Response(
+        {"detail": "Password reset is unavailable until secure delivery and confirmation are configured."},
+        status=status.HTTP_503_SERVICE_UNAVAILABLE
+    )
+
 
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
@@ -219,6 +234,7 @@ class LogoutView(APIView):
     def post(self, request):
         logout(request)
         return Response({"message": "Logged out successfully"}, status=status.HTTP_200_OK)
+
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -235,6 +251,7 @@ def dashboard(request):
         return Response({"message": "Welcome to client dashboard"}, status=status.HTTP_200_OK)
     else:
         return Response({"message": "Welcome to general dashboard"}, status=status.HTTP_200_OK)
+
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])

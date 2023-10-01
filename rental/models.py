@@ -1,7 +1,7 @@
-from django.conf import settings
 from django.db import models
 import bnbu_constants.constants as constants
-    
+
+
 class RentalProperty(models.Model):
     user_id = models.IntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, blank=True, null=True)

@@ -6,7 +6,6 @@ from rest_framework.decorators import action
 from bnbu_constants.utility import (validate_file_type, file_to_df, validate_df, normalize_df,
                                     normalize_column, clean_price)
 from rest_framework.response import Response
-import bnbu_constants.constants as constants
 from django.db.models import Max
 from datetime import datetime
 from django.db.models import Q

@@ -4,9 +4,12 @@ from .models import Lease, Document
 from cloudinary.uploader import upload
 from django.conf import settings
 
+
 def require_demo_upload_opt_in():
     if not getattr(settings, "ENABLE_DOCUMENT_UPLOADS", False):
-        raise serializers.ValidationError("Document uploads are disabled: configure private storage before using real documents.")
+        raise serializers.ValidationError(
+            "Document uploads are disabled: configure private storage before using real documents."
+        )
 
 
 class DocumentSerializer(serializers.ModelSerializer):
@@ -19,6 +22,7 @@ class DocumentSerializer(serializers.ModelSerializer):
         # analysis output and chat history are written by the server, never by clients.
         read_only_fields = ['file', 'version', 'uploaded_at', 'gpt_response', 'chat_history']
 
+
 class LeaseSerializer(serializers.ModelSerializer):
     num_of_docs = serializers.IntegerField(read_only=True)
     documents = DocumentSerializer(many=True, read_only=True)
@@ -29,6 +33,7 @@ class LeaseSerializer(serializers.ModelSerializer):
             'id', 'date', 'address1', 'address2', 'city', 'state', 'zip_code',
             'status', 'num_of_docs', 'documents'
         ]
+
 
 class LeaseUploadSerializer(serializers.ModelSerializer):
     documents = serializers.ListField(
@@ -51,8 +56,9 @@ class LeaseUploadSerializer(serializers.ModelSerializer):
         for doc in documents:
             cloudinary_file = upload(doc, use_filename=True, resource_type='raw', access_mode='public')
             new_file_urls.append(cloudinary_file['url'])
-            Document.objects.create(lease=lease, file_url=cloudinary_file['url'],name=doc.name)
+            Document.objects.create(lease=lease, file_url=cloudinary_file['url'], name=doc.name)
         return lease
+
 
 class RevisedLeaseUploadSerializer(serializers.Serializer):
     documents = serializers.ListField(
@@ -72,11 +78,12 @@ class RevisedLeaseUploadSerializer(serializers.Serializer):
         for doc in documents:
             cloudinary_file = upload(doc, use_filename=True, resource_type='raw', access_mode='public')
             new_file_urls.append(cloudinary_file['url'])
-            document = Document.objects.create(lease=instance, file_url=cloudinary_file['url'],name=doc.name)
+            document = Document.objects.create(lease=instance, file_url=cloudinary_file['url'], name=doc.name)
             created_document_ids.append(document.id)
 
         # Return the document IDs
         return created_document_ids
+
 
 class GPTChatSerializer(serializers.Serializer):
     message = serializers.CharField(
@@ -85,5 +92,3 @@ class GPTChatSerializer(serializers.Serializer):
         help_text="Enter your message or prompt to interact with the GPT model."
     )
     document_id = serializers.IntegerField(required=False, help_text="Optional; must match the document in the URL.")
-
-

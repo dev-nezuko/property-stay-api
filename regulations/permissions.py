@@ -1,5 +1,6 @@
 from rest_framework import permissions
 
+
 class IsSpecificUserType(permissions.BasePermission):
     """
     Custom permission to allow access based on specific user types.

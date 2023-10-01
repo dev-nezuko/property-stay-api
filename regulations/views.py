@@ -2,7 +2,6 @@ import logging
 from datetime import datetime, timedelta, timezone
 import re
 import openai
-from django.db.models import Q
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -19,12 +18,13 @@ from bnbu_constants.utility import to_chat_messages
 
 logger = logging.getLogger(__name__)
 
+
 class RegulationsViewSet(viewsets.ModelViewSet):
     queryset = Regulations.objects.all().order_by('-created_at')
     filter_backends = [SearchFilter, OrderingFilter, DjangoFilterBackend]
     search_fields = ['search', 'status']
     filterset_fields = ['search', 'status']
-    permission_classes = [IsAuthenticated, IsSpecificUserType , IsAdminOrOwnData]
+    permission_classes = [IsAuthenticated, IsSpecificUserType, IsAdminOrOwnData]
     pagination_class = PageNumberPagination
     serializer_class = RegulationsSerializer
 
@@ -34,8 +34,7 @@ class RegulationsViewSet(viewsets.ModelViewSet):
         """
         if self.request.user.is_staff:
             return Regulations.objects.all().order_by("-created_at")  # Apply ordering here
-        return Regulations.objects.filter(user=self.request.user).order_by("-created_at")  # Apply ordering for user data
-
+        return Regulations.objects.filter(user=self.request.user).order_by("-created_at")
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -53,24 +52,45 @@ class RegulationsViewSet(viewsets.ModelViewSet):
         """
         # Prepare the system message and user input
         system_message = """
-                This GPT acts as a knowledgeable consultant specializing in short-term rental (STR) laws, providing users with concise and accurate information, advice, and strategies related to the legality of short-term rentals in various areas.
+                This GPT acts as a knowledgeable consultant specializing in short-term rental (STR) laws,
+                providing users with concise and accurate information, advice, and strategies related to the
+                legality of short-term rentals in various areas.
                 Each response begins with a clear status update of the STR legality in the specific area:
 
-                'SHORT TERM RENTAL ALLOWED,' 'SHORT TERM RENTAL ALLOWED WITH RESTRICTIONS,' or 'SHORT TERM RENTAL NOT ALLOWED.'
+                'SHORT TERM RENTAL ALLOWED,' 'SHORT TERM RENTAL ALLOWED WITH RESTRICTIONS,' or 'SHORT TERM
+                RENTAL NOT ALLOWED.'
 
-                After this, the GPT offers bullet-point summaries of the relevant regulations, ensuring that users can quickly grasp the key points.
-                The information is thoroughly sourced from official government websites, and all URLs in the response will be formatted using **Markdown syntax** to ensure they are **100% clickable**, like this: [Click here](http://example.com).
-                Each clickable link will also include the source site to make it clear where the information is coming from, ensuring full transparency and accuracy.
-                If STRs are banned or restricted, the GPT actively researches and highlights any potential loopholes, alternative permits, reclassification strategies, or other legal workarounds that could enable operation in the area.
-                This includes exploring options like unincorporated areas, alternate zoning classifications, or non-primary residence allowances.
-                The GPT will even suggest searches or perform extra research using real-time tools to uncover additional ways to operate a short-term rental legally.
-                It also explains how local rules differ in unincorporated areas or offers advice on how to apply for permits or operate within a permissible framework by reclassifying the property.
-                The GPT will reference specific codes, ordinances, and regulations by citing exact clauses and sections, such as 'LUC 20.20.800' or other relevant statutes, ensuring the accuracy of the legal advice provided.
-                In cases where short-term rentals are subject to zoning regulations, the GPT assists users in understanding and addressing zoning issues and permits.
-                In cases where specific residency requirements are in place, the GPT will clarify in exact terms whether the law applies to property owners, authorized agents, tenants, or other representatives.
-                For example, in areas like Kirkland, Washington, where specific rules apply, it will state that the property owner or an authorized agent must occupy the property for a minimum of 245 days per year to qualify the residence for short-term rentals.
-                Responses are informative and thorough, providing helpful resources and citations with clickable links to ensure users have access to the most relevant and accurate information.
-                Importantly, the GPT clarifies whether short-term rental laws apply to owners, renters, agents, or representatives, and offers strategies for compliance or legal workarounds.
+                After this, the GPT offers bullet-point summaries of the relevant regulations, ensuring that
+                users can quickly grasp the key points.
+                The information is thoroughly sourced from official government websites, and all URLs in the
+                response will be formatted using **Markdown syntax** to ensure they are **100% clickable**,
+                like this: [Click here](http://example.com).
+                Each clickable link will also include the source site to make it clear where the information
+                is coming from, ensuring full transparency and accuracy.
+                If STRs are banned or restricted, the GPT actively researches and highlights any potential
+                loopholes, alternative permits, reclassification strategies, or other legal workarounds that
+                could enable operation in the area.
+                This includes exploring options like unincorporated areas, alternate zoning classifications,
+                or non-primary residence allowances.
+                The GPT will even suggest searches or perform extra research using real-time tools to uncover
+                additional ways to operate a short-term rental legally.
+                It also explains how local rules differ in unincorporated areas or offers advice on how to
+                apply for permits or operate within a permissible framework by reclassifying the property.
+                The GPT will reference specific codes, ordinances, and regulations by citing exact clauses and
+                sections, such as 'LUC 20.20.800' or other relevant statutes, ensuring the accuracy of the
+                legal advice provided.
+                In cases where short-term rentals are subject to zoning regulations, the GPT assists users in
+                understanding and addressing zoning issues and permits.
+                In cases where specific residency requirements are in place, the GPT will clarify in exact
+                terms whether the law applies to property owners, authorized agents, tenants, or other
+                representatives.
+                For example, in areas like Kirkland, Washington, where specific rules apply, it will state
+                that the property owner or an authorized agent must occupy the property for a minimum of 245
+                days per year to qualify the residence for short-term rentals.
+                Responses are informative and thorough, providing helpful resources and citations with
+                clickable links to ensure users have access to the most relevant and accurate information.
+                Importantly, the GPT clarifies whether short-term rental laws apply to owners, renters,
+                agents, or representatives, and offers strategies for compliance or legal workarounds.
 
                 Please ensure the status is clearly mentioned in the response along with a summary of your findings.
 
@@ -144,16 +164,20 @@ class RegulationsViewSet(viewsets.ModelViewSet):
 
         # Prepare the system message with context
         system_message = f"""
-        This GPT acts as a knowledgeable consultant specializing in short-term rental (STR) laws, providing users with concise and accurate information, advice, and strategies related to the legality of short-term rentals in various areas.
+        This GPT acts as a knowledgeable consultant specializing in short-term rental (STR) laws, providing
+        users with concise and accurate information, advice, and strategies related to the legality of
+        short-term rentals in various areas.
 
         Key responsibilities include:
         - Provide **clear status updates** on the legality of short-term rentals (STR) in the given area.
         - Offer **bullet-point summaries** of relevant regulations and guidelines for quick comprehension.
         - Source information **from official government websites**, ensuring accuracy and transparency.
         - Format all URLs using **Markdown syntax** to make them **clickable and informative**.
-        - Highlight **loopholes, alternative permits, or legal workarounds** for areas where STRs are restricted or banned.
+        - Highlight **loopholes, alternative permits, or legal workarounds** for areas where STRs are
+          restricted or banned.
         - Explore **unincorporated areas** or **reclassification strategies** for potential legal operation.
-        - Reference specific **codes, ordinances, and statutes** (e.g., "LUC 20.20.800") in responses for legal accuracy.
+        - Reference specific **codes, ordinances, and statutes** (e.g., "LUC 20.20.800") in responses for
+          legal accuracy.
         - Assist users in understanding **zoning regulations, permits**, and **residency requirements**.
         - Provide guidance on compliance strategies, including **applying for permits** or **reclassifying properties**.
         - Offer **strategic advice** on how local rules apply to **property owners, renters, or agents**.
@@ -163,7 +187,8 @@ class RegulationsViewSet(viewsets.ModelViewSet):
         Here’s a summary of previous analysis:
         {summary}
 
-        Please assist the user with further queries regarding the regulation. Provide relevant responses based on the summary and chat history.
+        Please assist the user with further queries regarding the regulation. Provide relevant responses based
+        on the summary and chat history.
         """
 
         # Initialize chat history
@@ -187,7 +212,7 @@ class RegulationsViewSet(viewsets.ModelViewSet):
             gpt_response = response['choices'][0]['message']['content']
 
             # Append GPT's response to the chat history
-            gpt_response_entry ={
+            gpt_response_entry = {
                 'role': 'assistant',
                 'content': gpt_response,
                 'timestamp': datetime.now(timezone.utc).isoformat()
@@ -253,8 +278,7 @@ class RegulationsViewSet(viewsets.ModelViewSet):
 
         # Filter by search
         if query:
-          regulations = regulations.filter(search__icontains=query)
-
+            regulations = regulations.filter(search__icontains=query)
 
         # Filter by created_at for date range
         if start_date:
@@ -262,7 +286,8 @@ class RegulationsViewSet(viewsets.ModelViewSet):
                 start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
                 regulations = regulations.filter(created_at__gte=start_date)
             except ValueError:
-                return Response({'detail': 'Invalid start date format. Use YYYY-MM-DD.'}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({'detail': 'Invalid start date format. Use YYYY-MM-DD.'},
+                                status=status.HTTP_400_BAD_REQUEST)
 
         if end_date:
             try:
@@ -270,10 +295,10 @@ class RegulationsViewSet(viewsets.ModelViewSet):
                 end_date = end_date + timedelta(days=1)  # Include the entire end day
                 regulations = regulations.filter(created_at__lte=end_date)
             except ValueError:
-                return Response({'detail': 'Invalid end date format. Use YYYY-MM-DD.'}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({'detail': 'Invalid end date format. Use YYYY-MM-DD.'},
+                                status=status.HTTP_400_BAD_REQUEST)
         else:
             end_date = datetime.now().date()
-
 
         # Filter by status if provided
         if status_value:
@@ -289,4 +314,5 @@ class RegulationsViewSet(viewsets.ModelViewSet):
             return self.get_paginated_response(serializer.data)
 
         serializer = self.get_serializer(regulations, many=True)
-        return Response(serializer.data if regulations.exists() else {'detail': 'No regulations found.'}, status=status.HTTP_200_OK)
+        return Response(serializer.data if regulations.exists() else {'detail': 'No regulations found.'},
+                        status=status.HTTP_200_OK)

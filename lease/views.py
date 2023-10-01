@@ -1,27 +1,33 @@
 import logging
-import os
-import requests
-from rest_framework import viewsets, status
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework.filters import SearchFilter
-from .tasks import analyze_document_task
-from .models import Lease, Document
-from .serializers import GPTChatSerializer, LeaseSerializer, LeaseUploadSerializer, RevisedLeaseUploadSerializer, DocumentSerializer
-from rest_framework.permissions import IsAuthenticated
-from .permissions import IsSpecificUserType, IsAdminOrOwnData
-from django.utils import timezone
-from rest_framework.pagination import PageNumberPagination
-from django.db.models import Q
-from django.http import StreamingHttpResponse
-from datetime import timedelta, datetime, timezone
+from datetime import datetime, timedelta, timezone
+
 import openai
-from django.shortcuts import get_object_or_404
 from django.conf import settings
+from django.db.models import Q
+from django.shortcuts import get_object_or_404
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
+from rest_framework.filters import SearchFilter
+from rest_framework.pagination import PageNumberPagination
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
 from bnbu_constants.utility import to_chat_messages
 
+from .models import Document, Lease
+from .permissions import IsAdminOrOwnData, IsSpecificUserType
+from .serializers import (
+    DocumentSerializer,
+    GPTChatSerializer,
+    LeaseSerializer,
+    LeaseUploadSerializer,
+    RevisedLeaseUploadSerializer,
+)
+from .tasks import analyze_document_task
+
 logger = logging.getLogger(__name__)
+
 
 class LeaseViewSet(viewsets.ModelViewSet):
     queryset = Lease.objects.all().order_by("-created_at")
@@ -30,7 +36,6 @@ class LeaseViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsSpecificUserType, IsAdminOrOwnData]  # Update permission classes
     pagination_class = PageNumberPagination
     serializer_class = LeaseSerializer
-
 
     def get_queryset(self):
         """
@@ -195,8 +200,6 @@ class DocumentViewSet(viewsets.ModelViewSet):
             {"detail": "Document file not found."}, status=status.HTTP_404_NOT_FOUND
         )
 
-
-
     @action(detail=False, methods=["get"], url_path=r"lease/(?P<lease_id>\d+)/documents")
     def list_document_names(self, request, lease_id=None):
         # Fetch documents related to the specified lease ID
@@ -216,7 +219,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 "name": f"{doc.name.split('/')[-1].rsplit('.', 1)[0]}_v{doc.version}",
                 "uploaded_at": doc.uploaded_at,
                 "status": doc.status,
-                "file_url" : doc.file_url,
+                "file_url": doc.file_url,
             }
             for doc in documents
         ]
@@ -251,7 +254,8 @@ class DocumentViewSet(viewsets.ModelViewSet):
             results.append(
                 {
                     "document_id": document_id,
-                    "detail": f"Document review for document ID {document_id} has started. The review process is in progress."
+                    "detail": f"Document review for document ID {document_id} has started. "
+                              "The review process is in progress."
                 }
             )
         return Response(results, status=status.HTTP_200_OK)
@@ -277,18 +281,24 @@ class DocumentViewSet(viewsets.ModelViewSet):
 
         # Prepare the system message with document context
         system_message = f"""
-        You are a short-term rental contract expert designed to help users, especially students, review rental leases. Your primary goal is to assist users in identifying unusual clauses, potential legal risks, and ensuring transparency within the lease documents.
+        You are a short-term rental contract expert designed to help users, especially students, review rental
+        leases. Your primary goal is to assist users in identifying unusual clauses, potential legal risks,
+        and ensuring transparency within the lease documents.
 
         Key responsibilities include:
         - Identifying critical financial details such as rent amounts and security deposits.
-        - Reviewing leases for unfavorable terms to the tenant, including disproportionate fees, restrictions, or unclear responsibilities.
+        - Reviewing leases for unfavorable terms to the tenant, including disproportionate fees, restrictions,
+          or unclear responsibilities.
         - Making suggestions for favorable terms and negotiation strategies.
-        - Ensuring checkbox provisions are correctly applied, particularly regarding assignment, subleasing, and permissions.
-        - Focusing on key areas such as lease length, related fees, and responsibilities of both the landlord and tenant.
+        - Ensuring checkbox provisions are correctly applied, particularly regarding assignment, subleasing,
+          and permissions.
+        - Focusing on key areas such as lease length, related fees, and responsibilities of both the landlord
+          and tenant.
 
         Review Summary: {summary}
 
-        The user may ask questions about this document. Provide relevant responses based on the review summary and chat history.
+        The user may ask questions about this document. Provide relevant responses based on the review summary
+        and chat history.
         """
 
         # Initialize the chat history

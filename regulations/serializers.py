@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import Regulations
 
+
 class RegulationsSerializer(serializers.ModelSerializer):
     class Meta:
         model = Regulations
@@ -13,7 +14,8 @@ class RegulationsSerializer(serializers.ModelSerializer):
         validated_data['user'] = user
 
         return Regulations.objects.create(**validated_data)
-    
+
+
 class GPTChatSerializer(serializers.Serializer):
     message = serializers.CharField(
         required=True,
@@ -24,4 +26,3 @@ class GPTChatSerializer(serializers.Serializer):
         required=False,
         help_text="Optional; must match the regulation in the URL."
     )
-
