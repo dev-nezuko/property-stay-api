@@ -111,12 +111,19 @@ class DocumentAnalysisTests(APITestCase):
         reader = type("Reader", (), {"pages": pages})()
         fetched = type("Resp", (), {"status_code": 200, "content": b"%PDF"})()
         with patch("lease.utils.requests.get", return_value=fetched), \
-                patch("lease.utils.PyPDF2.PdfReader", return_value=reader), \
+                patch("lease.utils.pypdf.PdfReader", return_value=reader), \
                 patch("lease.utils.openai.ChatCompletion.create", side_effect=fake_create):
             result = analyze_document_with_gpt(self.document)
         self.assertEqual(result["status"], "Approved")
         self.assertEqual(result["message"], "Rent is fair.")
         self.assertNotIn("provider exploded", calls[-1])
+
+    def test_unreadable_pdf_is_reported_as_an_error(self):
+        from .utils import analyze_document_with_gpt
+        fetched = type("Resp", (), {"status_code": 200, "content": b"not a pdf at all"})()
+        with patch("lease.utils.requests.get", return_value=fetched):
+            result = analyze_document_with_gpt(self.document)
+        self.assertEqual(result["status"], "Error")
 
     def test_failed_analysis_keeps_document_and_lease_status(self):
         from .tasks import analyze_document_task

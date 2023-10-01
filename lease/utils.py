@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timezone
 import re
 import time
-import PyPDF2
+import pypdf
 from django.conf import settings
 import openai
 import requests
@@ -93,7 +93,7 @@ def analyze_document_with_gpt(document):
             raise ValueError("Failed to fetch document from Cloudinary.")
 
         file_content = io.BytesIO(response.content)
-        reader = PyPDF2.PdfReader(file_content)
+        reader = pypdf.PdfReader(file_content)
         num_pages = len(reader.pages)
         logger.info(f"Document has {num_pages} pages.")
         chunk_size = 5
@@ -199,7 +199,7 @@ def analyze_document_with_gpt(document):
             "created_time": created_time,
         }
 
-    except (ValueError, requests.RequestException, PyPDF2.errors.PdfReadError, openai.error.OpenAIError) as error:
+    except (ValueError, requests.RequestException, pypdf.errors.PyPdfError, openai.error.OpenAIError) as error:
         logger.exception("Document analysis failed for document ID %s.", document.id)
         return {
             "status": "Error",
