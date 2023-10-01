@@ -1,0 +1,14 @@
+.git
+.github
+.env
+.env.*
+*.sqlite3
+*.log
+**/__pycache__
+**/.DS_Store
+staticfiles/
+media/
+docs/
+rental/data.xlsx
+project_venv/
+node_modules/

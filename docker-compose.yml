@@ -1,0 +1,54 @@
+# Local stack: API (gunicorn), Celery worker, PostgreSQL and Redis.
+# Secrets come from .env; see README "Run it with Docker Compose".
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: property_stay
+      POSTGRES_USER: property_stay
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U property_stay -d property_stay"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  web:
+    build: .
+    env_file: .env
+    environment: &app-env
+      DATABASE_URL: postgres://property_stay:${POSTGRES_PASSWORD}@db:5432/property_stay
+      REDIS_URL: redis://redis:6379/0
+      ALLOWED_HOSTS: localhost,127.0.0.1
+    command: sh -c "python manage.py migrate --noinput && exec gunicorn bnbu_backend_api.wsgi --bind 0.0.0.0:8000 --workers 2 --access-logfile -"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    env_file: .env
+    environment: *app-env
+    command: celery -A bnbu_backend_api worker --pool=threads --loglevel=info --concurrency=2
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
