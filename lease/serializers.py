@@ -81,6 +81,6 @@ class GPTChatSerializer(serializers.Serializer):
         allow_blank=False,
         help_text="Enter your message or prompt to interact with the GPT model."
     )
-    document_id = serializers.IntegerField(required=True)
+    document_id = serializers.IntegerField(required=False, help_text="Optional; must match the document in the URL.")
 
 

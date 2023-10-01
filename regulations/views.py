@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 import re
 import openai
@@ -14,6 +15,9 @@ from .models import Regulations
 from .serializers import GPTChatSerializer, RegulationsSerializer
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import action
+from bnbu_constants.utility import to_chat_messages
+
+logger = logging.getLogger(__name__)
 
 class RegulationsViewSet(viewsets.ModelViewSet):
     queryset = Regulations.objects.all().order_by('-created_at')
@@ -112,10 +116,11 @@ class RegulationsViewSet(viewsets.ModelViewSet):
                 'created_time': timestamp
             }
 
-        except Exception as e:
+        except openai.error.OpenAIError:
+            logger.exception('Regulation analysis failed for regulation %s.', regulation.pk)
             return {
                 'status': 'error',
-                'message': str(e)
+                'message': 'The language model request failed; the regulation was saved without analysis.'
             }
 
     @action(detail=True, methods=['post'], url_path='chat')
@@ -126,10 +131,12 @@ class RegulationsViewSet(viewsets.ModelViewSet):
         serializer = GPTChatSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        user_message = serializer.validated_data['message']
+        regulation = self.get_object()
         regulation_id = serializer.validated_data.get('regulation_id')
-        user_message = serializer.validated_data.get('message')
-
-        regulation = get_object_or_404(self.get_queryset(), id=regulation_id)
+        if regulation_id is not None and regulation_id != regulation.pk:
+            return Response({'regulation_id': 'Does not match the regulation in the URL.'},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         # Fetch the summary from the regulation's GPT response
         gpt_response_data = regulation.gpt_response if regulation.gpt_response else {}
@@ -175,10 +182,7 @@ class RegulationsViewSet(viewsets.ModelViewSet):
             openai.api_key = settings.OPENAI_API_KEY
             response = openai.ChatCompletion.create(
                 model="gpt-4",
-                messages=[
-                    {'role': 'system', 'content': system_message},
-                    *chat_history
-                ]
+                messages=to_chat_messages(system_message, chat_history),
             )
             gpt_response = response['choices'][0]['message']['content']
 
@@ -198,8 +202,10 @@ class RegulationsViewSet(viewsets.ModelViewSet):
                 'summary': summary
             }, status=status.HTTP_200_OK)
 
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except openai.error.OpenAIError:
+            logger.exception('Regulation chat failed for regulation %s.', regulation.pk)
+            return Response({'error': 'The language model request failed. Try again later.'},
+                            status=status.HTTP_502_BAD_GATEWAY)
 
     @action(detail=True, methods=['get'], url_path='get-chat-history')
     def get_chat_history(self, request, pk=None):

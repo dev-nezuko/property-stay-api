@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 def analyze_chunk(chunk, system_message):
     """
     Analyzes a chunk of text using OpenAI GPT-4 API with retries for handling rate limits.
+    Returns None when the chunk could not be analysed, so failures never leak into the summary.
     """
     retry_attempts = 3
     for attempt in range(retry_attempts):
@@ -52,20 +53,27 @@ def analyze_chunk(chunk, system_message):
                     ],
                 )
                 return response["choices"][0]["message"]["content"]
-        except openai.error.RateLimitError:
-            logger.error(f"RateLimitError: {e}")
+        except openai.error.RateLimitError as error:
+            logger.error("RateLimitError: %s", error)
             if attempt < retry_attempts - 1:
                 logger.info("Retrying after 30 seconds.")
-                time.sleep(30)  # Wait before retrying
+                time.sleep(30)
             else:
                 logger.critical("Rate limit exceeded after multiple attempts.")
-                return {
-                    "status": "Error",
-                    "message": "Rate limit exceeded after multiple attempts",
-                }
-        except Exception as e:
-            logger.exception("An error occurred in analyze_chunk.")
-            return str(e)
+        except openai.error.OpenAIError:
+            logger.exception("OpenAI request failed in analyze_chunk.")
+            return None
+    return None
+
+
+STATUS_PATTERN = re.compile(r"\b(approved|rejected|draft)\b", re.IGNORECASE)
+LABELLED_STATUS_PATTERN = re.compile(r"status\W{0,5}(approved|rejected|draft)\b", re.IGNORECASE)
+
+
+def parse_lease_status(analysis):
+    """Prefer an explicit "Status: X" label, then the first status word, then Draft."""
+    match = LABELLED_STATUS_PATTERN.search(analysis) or STATUS_PATTERN.search(analysis)
+    return match.group(1).capitalize() if match else "Draft"
 
 
 def analyze_document_with_gpt(document):
@@ -81,7 +89,7 @@ def analyze_document_with_gpt(document):
             raise ValueError("Document file URL is not set.")
 
         # Fetch the document from Cloudinary
-        response = requests.get(document.file_url, stream=True)
+        response = requests.get(document.file_url, timeout=60)
         if response.status_code != 200:
             logger.error(f"Failed to fetch document from Cloudinary. Status code: {response.status_code}")
             raise ValueError("Failed to fetch document from Cloudinary.")
@@ -93,13 +101,14 @@ def analyze_document_with_gpt(document):
         chunk_size = 5
         chunks = [
             "".join(
-                reader.pages[j].extract_text()
+                reader.pages[j].extract_text() or ""
                 for j in range(i, min(i + chunk_size, num_pages))
             )
             for i in range(0, num_pages, chunk_size)
         ]
         logger.info(f"Document split into {len(chunks)} chunks.")
 
+        chunks = [chunk for chunk in chunks if chunk.strip()]
         if not chunks:
             logger.error("No text found in the document.")
             raise ValueError("No text found in the document.")
@@ -128,24 +137,15 @@ def analyze_document_with_gpt(document):
             Please ensure the status is clearly mentioned in the response along with a summary of your findings.
             """
 
-        # logger.info("Starting group task for chunk analysis.")
-        # group_results = group(analyze_chunk.s(chunk, system_message) for chunk in chunks)()
-        # chunk_summaries = group_results.get()
-        # chunk_summaries = [result.get('message', '') if isinstance(result, dict) else str(result) for result in chunk_summaries]
-        # logger.info("Chunk analysis completed. Combining summaries.")
-        # combined_summary = " ".join(chunk_summaries)
-        # logger.info(f"Combined summary token count: {len(tiktoken.get_encoding('cl100k_base').encode(combined_summary))}")
 
-        chunk_summaries = []
-        # Process each chunk sequentially
-        for chunk in chunks:
-            result = analyze_chunk(chunk, system_message)
-            if isinstance(result, str):
-                chunk_summaries.append(result)
+        chunk_summaries = [
+            summary for summary in (analyze_chunk(chunk, system_message) for chunk in chunks) if summary
+        ]
+        if not chunk_summaries:
+            raise ValueError("None of the document chunks could be analysed.")
 
         combined_summary = " ".join(chunk_summaries)
-
-        combined_tokens = len(encoding.encode(result))
+        combined_tokens = len(encoding.encode(combined_summary))
 
         if combined_tokens > 4096:
             logger.warning("Combined summary exceeds token limit. Summarizing.")
@@ -178,12 +178,7 @@ def analyze_document_with_gpt(document):
             final_analysis_response["created"], tz=timezone.utc
         ).isoformat()
 
-        if "approved" in analysis_result.lower():
-            status = "Approved"
-        elif "rejected" in analysis_result.lower():
-            status = "Rejected"
-        else:
-            status = "Draft"
+        status = parse_lease_status(analysis_result)
 
         logger.info(f"Document analysis result: {status}")
 
@@ -193,31 +188,15 @@ def analyze_document_with_gpt(document):
             message_lines[1] if len(message_lines) > 1 else ""
         )  # The message after the first newline
 
-        # Store the GPT response as a text string in JSON format
-        gpt_response_text = json.dumps(
-            {
-                "status": status,
-                "message": gpt_message,  # Use the modified message without the status
-                "created_time": created_time,
-            }
-        )
-
-        # Update the document object
-        document.status = status
-        document.gpt_response = gpt_response_text
-        document.gpt_created_time = created_time
-        document.save()
-
-        # Return the response
         return {
             "status": status,
             "message": gpt_message,  # The message without the status
             "created_time": created_time,
         }
 
-    except Exception as e:
-        logger.exception("An error occurred in _analyze_document_with_gpt.")
+    except (ValueError, requests.RequestException, PyPDF2.errors.PdfReadError, openai.error.OpenAIError) as error:
+        logger.exception("Document analysis failed for document ID %s.", document.id)
         return {
             "status": "Error",
-            "message": f"An unexpected error occurred: {str(e)}",
+            "message": f"Document analysis failed: {error}",
         }

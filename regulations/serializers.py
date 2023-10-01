@@ -36,7 +36,7 @@ class GPTChatSerializer(serializers.Serializer):
         help_text="Enter your message or prompt to interact with the GPT model."
     )
     regulation_id = serializers.IntegerField(
-        required=True,
-        help_text="Enter the ID of the regulation to interact with."
+        required=False,
+        help_text="Optional; must match the regulation in the URL."
     )
 

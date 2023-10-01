@@ -1,3 +1,4 @@
+import logging
 import os
 import requests
 from rest_framework import viewsets, status
@@ -18,6 +19,9 @@ from datetime import timedelta, datetime, timezone
 import openai
 from django.shortcuts import get_object_or_404
 from django.conf import settings
+from bnbu_constants.utility import to_chat_messages
+
+logger = logging.getLogger(__name__)
 
 class LeaseViewSet(viewsets.ModelViewSet):
     queryset = Lease.objects.all().order_by("-created_at")
@@ -258,12 +262,12 @@ class DocumentViewSet(viewsets.ModelViewSet):
         serializer = GPTChatSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        # Extract validated data
+        user_message = serializer.validated_data["message"]
+        document = self.get_object()
         document_id = serializer.validated_data.get("document_id")
-        user_message = serializer.validated_data.get("message")
-
-        # Fetch the document
-        document = get_object_or_404(self.get_queryset(), id=document_id)
+        if document_id is not None and document_id != document.pk:
+            return Response({"document_id": "Does not match the document in the URL."},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         # Fetch the summary from the document's GPT review response
         gpt_response_data = document.gpt_response if document.gpt_response else {}
@@ -301,7 +305,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
             openai.api_key = settings.OPENAI_API_KEY
             response = openai.ChatCompletion.create(
                 model="gpt-4",
-                messages=[{"role": "system", "content": system_message}, *chat_history],
+                messages=to_chat_messages(system_message, chat_history),
             )
 
             gpt_response = response["choices"][0]["message"]["content"]
@@ -325,9 +329,11 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_200_OK,
             )
 
-        except Exception as e:
+        except openai.error.OpenAIError:
+            logger.exception("Document chat failed for document %s.", document.pk)
             return Response(
-                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {"error": "The language model request failed. Try again later."},
+                status=status.HTTP_502_BAD_GATEWAY,
             )
 
     @action(detail=True, methods=["get"], url_path="get-chat-history")

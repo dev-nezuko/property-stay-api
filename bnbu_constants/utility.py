@@ -91,3 +91,10 @@ def determine_property_status(no_of_bedrooms, monthly_estimated_profit):
         return "Approved"
     else:
         return "Rejected"
+
+
+def to_chat_messages(system_message, chat_history):
+    """Build an OpenAI message list; stored history carries timestamps the API rejects."""
+    return [{"role": "system", "content": system_message}] + [
+        {"role": entry["role"], "content": entry["content"]} for entry in chat_history
+    ]
