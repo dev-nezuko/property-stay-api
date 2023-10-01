@@ -1,85 +1,234 @@
-# Property research backend
+# Property Stay API
 
-A Django REST backend for a property-research workflow: manage client/customer accounts, organize leases and document revisions, store model-generated rental-regulation notes, and process rental-property spreadsheets through a Celery worker.
+A Django REST backend for a short-term-rental research workflow. Staff manage client and customer accounts; clients keep leases with versioned lease documents, ask a language model to review a lease or summarise local short-term-rental rules, and upload spreadsheets of rental listings that a Celery worker enriches with AirDNA projections and scores for profitability.
 
-The code connects several services, but it is a prototype rather than a verified property, legal or investment decision system. Model responses are not checked against current regulations or independent sources. No browser, retrieval or citation-verification tool is connected to the regulation prompt.
+It is a working prototype, not a verified property, legal or investment decision system. Model answers are not checked against current regulations or independent sources, and no browser, retrieval or citation tool is connected to the prompts.
 
-## Request flow
+## How it fits together
 
 ```mermaid
 flowchart LR
-    Client[API client] --> API[Django REST + JWT]
-    API --> DB[(Database)]
-    API --> Queue[Celery / Redis]
-    Queue --> Rental[Spreadsheet enrichment]
-    Queue --> Documents[Document analysis]
-    Rental --> Providers[AirDNA / ClickUp]
-    Documents --> Model[OpenAI]
-    API -. demo uploads disabled by default .-> Storage[Cloudinary]
+    Client[API client] -->|JWT| API[Django REST API<br/>gunicorn]
+    API --> DB[(PostgreSQL)]
+    API -->|queue spreadsheet / lease review| Redis[(Redis<br/>broker + cache)]
+    Redis --> Worker[Celery worker]
+    Worker --> DB
+    Worker -->|projections| AirDNA[AirDNA]
+    Worker -->|approved listings| ClickUp[ClickUp]
+    Worker -->|lease review| OpenAI[OpenAI chat API]
+    API -->|regulation notes, chat| OpenAI
+    API -. uploads off by default .-> Cloudinary[Cloudinary]
 ```
 
-Lease documents have revision numbers and analysis history. Rental rows carry a batch ID and an owning user ID. Ordinary accounts are restricted to their records; staff can administer records across owners. Customer management distinguishes staff from client accounts rather than trusting a user-supplied role label.
+| App | Responsibility |
+| --- | --- |
+| `accounts` | Email-based custom user with roles (admin, research, coach, client, customer), staff administration of users and clients, client-owned customers, first-login password change |
+| `lease` | Leases, versioned documents, queued model review of a lease PDF, per-document chat |
+| `regulations` | Saved short-term-rental rule lookups for a place, model summary and follow-up chat |
+| `rental` | Spreadsheet upload, AirDNA enrichment and profit scoring in Celery, filtered listing and CSV export |
+| `bnbu_constants` | Spreadsheet parsing, AirDNA client and the profit/status rules |
 
-## Local setup
+The Django project package is `bnbu_backend_api`.
 
-The requirements retain Django 5.1.2 and the existing provider SDK pins. Use an isolated Python environment; no blanket dependency migration was performed.
+## Run it with Docker Compose
+
+Needs Docker with Compose v2. This starts the API on port 8000, a Celery worker, PostgreSQL 17 and Redis 7:
 
 ```sh
-git clone <repository-url>
-cd property-stay-api
+cp .env.example .env
+echo "SECRET_KEY=$(openssl rand -hex 32)" >> .env
+echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)" >> .env
+docker compose up --build -d
+docker compose exec web python manage.py createsuperuser
+```
+
+The web container applies migrations before gunicorn starts. The admin site is at <http://localhost:8000/admin/>, and the JSON API is under `/api/` and `/account/`. Stop with `docker compose down` (add `-v` to drop the database volume).
+
+The provider keys in `.env` (OpenAI, AirDNA, ClickUp, Cloudinary) can stay empty: accounts, leases, searches, filters and exports work without them. Spreadsheet uploads are still queued and processed, but rows are only saved once `AIRDNA_URL` and `AIRDNA_API_KEY` are set.
+
+## Run it without Docker
+
+Python 3.12 (see `.python-version`). Development settings default to a local SQLite file, and Redis is only needed for the cache and Celery.
+
+```sh
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt
+pip install -r requirements-dev.txt
 cp .env.example .env
-python -c 'import secrets; print("SECRET_KEY=" + secrets.token_urlsafe(48))' >> .env
+echo "SECRET_KEY=$(python -c 'import secrets; print(secrets.token_urlsafe(48))')" >> .env
 python manage.py migrate
 python manage.py createsuperuser
 python manage.py runserver
 ```
 
-Development defaults to an ignored local SQLite database. Set `DATABASE_URL` to a private PostgreSQL connection string when testing PostgreSQL behavior; never copy a historical default password. Staging and production require their own database URL and host configuration. `.env` is read by the application and must stay untracked.
+Set `DATABASE_URL` in `.env` to use PostgreSQL instead. For queued work, start Redis and then run `celery -A bnbu_backend_api worker --pool=threads --loglevel=info`.
 
-For queued work, start a local Redis instance and then:
+## Tests and lint
 
 ```sh
-celery -A bnbu_backend_api.celery:app worker --loglevel=INFO
+python manage.py test --settings=bnbu_backend_api.test_settings
+flake8
 ```
 
-Provider-backed actions require their own credentials and configuration. An account-only local run does not verify OpenAI, Cloudinary, AirDNA, ClickUp, Redis, email delivery or PostgreSQL. The existing `openai==0.28.0` calls use the older `ChatCompletion` interface; mixing in a new major SDK without adapting those calls will not work.
+or, inside the Compose image:
 
-## API map
+```sh
+docker compose run --rm --no-deps web python manage.py test --settings=bnbu_backend_api.test_settings
+```
+
+`test_settings` uses in-memory SQLite, a local-memory cache, fast password hashing and no network; every provider call in the 65 tests is mocked. Never deploy with it. The tests cover per-owner isolation across leases, documents, regulations, rentals and customers; first-login rules; the upload opt-in; batch numbering; the rental filter and CSV export; the lease analysis pipeline and chat payloads; and the deployment settings.
+
+## API
+
+All endpoints except token creation need `Authorization: Bearer <access token>`.
 
 | Route | Purpose |
 | --- | --- |
-| `POST /api/token/` | Obtain JWTs with email and password |
-| `POST /api/token/refresh/` | Refresh an access token |
-| `/account/users/`, `/account/clients/` | Staff account administration |
-| `/account/clients/{id}/customers/` | Client/customer relationships |
-| `POST /account/users/update-password/{id}/` | Own-account first-login password update |
-| `/api/leases/`, `/api/documents/` | Lease records, document metadata and custom actions |
-| `/api/regulations/` | Saved model-generated location notes and chats |
-| `/api/rental_properties/` | Rental rows, batch processing and filtered exports |
+| `POST /api/token/`, `POST /api/token/refresh/` | Obtain and refresh JWTs with `email` and `password` |
+| `/account/users/`, `/account/users/{id}/` | Staff: list, create, update and delete users |
+| `/account/clients/`, `/account/clients/{id}/` | Staff: client accounts (deleting a client deletes its customers) |
+| `/account/clients/{id}/customers/`, `.../create/`, `.../{customer id}/` | Staff, or the client itself: its customers |
+| `POST /account/users/update-password/{id}/` | Own account only, first login only: set a new password |
+| `POST /account/password/change/` | Change your own password |
+| `GET /account/profile/`, `GET /account/dashboard/` | Current user; role-specific dashboard message |
+| `/api/leases/` (+ `upload/`, `search/`, `{id}/revised/`) | Leases and document uploads |
+| `/api/documents/` (+ `review/`, `{id}/chat/`, `{id}/get-chat-history/`, `preview/{id}/`, `lease/{id}/documents/`) | Document metadata, queued review, chat |
+| `/api/regulations/` (+ `search/`, `{id}/chat/`, `{id}/get-chat-history/`) | Rule lookups; creating one asks the model immediately |
+| `/api/rental_properties/` (+ `upload-properties/`, `task-progress/`, `task-result/`, `filtered-list/`, `download-csv/`, `all-properties/`) | Listings, spreadsheet import and exports |
 
-Authenticated API requests use `Authorization: Bearer <access-token>`. For example, `GET /api/leases/` returns the current account's paginated leases; staff see all leases. These are JSON APIs. The old README's registration, dashboard and profile HTML walkthrough did not describe the implemented application accurately; several account HTML views still lack templates.
+Ordinary accounts only ever see their own leases, documents, regulations and rental rows; staff see everything. Lease and regulation searches take `YYYY-MM-DD` dates; the rental filters take dates written like `December 3, 2024`. Both treat the end date as inclusive.
 
-## Important boundaries
+### Examples
 
-- **Document uploads default off.** The legacy Cloudinary uploader makes files public. Do not enable `ENABLE_DOCUMENT_UPLOADS=1` for real leases or personal documents; that switch only permits synthetic demo files. Private storage, signed retrieval, upload validation and retention rules need a deliberate implementation first. Existing uploaded files are not made private by this code change.
-- **Password reset is unavailable.** The old endpoint returned reset links to the caller and had no complete confirmation flow. It now returns a uniform 503 without account enumeration or a token. Add verified delivery and a confirmation endpoint before enabling it.
-- **Task ownership has a time limit.** Rental task IDs are associated with their submitter in cache for 24 hours. Unassociated or expired tasks are staff-only. This is not a durable task-ownership ledger; database-backed ownership would be stronger.
-- **No verified research guarantee.** Regulation prompts ask for current research, but the code only sends prompts to a model. Uploaded document content and addresses can reach configured providers. Use synthetic data during demonstrations.
-- **Concurrency and recovery need more work.** Document version and batch ID allocation can race. Jobs lack a full durable recovery protocol, provider timeout coverage is uneven, and malformed provider responses need broader tests.
+These were captured from the Compose stack with the demo data shown. Tokens and the long listing record are shortened.
 
-Redis TLS connections now require certificate verification. If credentials from earlier history were ever deployed, rotate them at their providers; rewriting Git cannot revoke credentials or remove external copies.
-
-## Checks
+Log in:
 
 ```sh
-python manage.py test accounts lease rental regulations --settings=bnbu_backend_api.test_settings
+curl -s -X POST localhost:8000/api/token/ -H 'Content-Type: application/json' \
+  -d '{"email": "admin@example.test", "password": "<your password>"}'
 ```
 
-The isolated settings module uses in-memory SQLite, a local cache, local email and test-only password hashing. Never deploy with it. Twenty focused tests cover account creation, first-login restrictions, customer permissions, tenant-filtered lists/searches, document access, disabled uploads and task ownership.
+```json
+{"refresh": "eyJhbGciOiJIUzI1NiIs...", "access": "eyJhbGciOiJIUzI1NiIs..."}
+```
 
-The review ran those tests with Django 5.2 in an isolated environment, substituting a storage adapter that fails if called. It did not install the complete production dependency set or run live integrations. The repository's declared Django 5.1 environment remains to be verified. The existing CI workflow formats changed Python files against a hardcoded `origin/master` reference; it does not run this test suite. Improving it requires a token with workflow permissions.
+Create a client, then a customer for it (staff token):
 
-`accounts/`, `lease/`, `regulations/` and `rental/` hold the domain code; `bnbu_constants/utility.py` contains spreadsheet and enrichment helpers. No license file is included.
+```sh
+curl -s -X POST localhost:8000/account/clients/ -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"email": "client@example.test", "first_name": "Casey", "last_name": "Client", "user_type": "client"}'
+```
+
+```json
+{"id": 2, "email": "client@example.test", "first_name": "Casey", "last_name": "Client", "user_type": "client", "is_active": true, "is_first_login": true}
+```
+
+```sh
+curl -s -X POST localhost:8000/account/clients/2/customers/create/ -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"email": "tenant@example.test", "first_name": "Taylor", "last_name": "Tenant"}'
+```
+
+```json
+{"id": 3, "email": "tenant@example.test", "first_name": "Taylor", "last_name": "Tenant", "user_type": "customer", "is_active": true, "is_first_login": true, "client": 2}
+```
+
+New accounts get a random temporary password and `is_first_login: true`; there is no email delivery, so an admin shares or resets the password out of band.
+
+Create a lease without documents, then search for it:
+
+```sh
+curl -s -X POST localhost:8000/api/leases/upload/ -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"address1": "101 Harbor View Rd", "city": "Sampletown", "state": "FL", "zip_code": "33000"}'
+curl -s "localhost:8000/api/leases/search/?address=Harbor" -H "Authorization: Bearer $TOKEN"
+```
+
+```json
+{"count": 1, "next": null, "previous": null, "results": [{"id": 1, "date": "2026-11-09", "address1": "101 Harbor View Rd", "address2": null, "city": "Sampletown", "state": "FL", "zip_code": "33000", "status": "Draft", "num_of_docs": 0, "documents": []}]}
+```
+
+Upload a listing spreadsheet (`docs/sample-listings.csv` has the expected columns) and poll the task:
+
+```sh
+curl -s -X POST localhost:8000/api/rental_properties/upload-properties/ \
+  -H "Authorization: Bearer $TOKEN" -F file=@docs/sample-listings.csv
+curl -s "localhost:8000/api/rental_properties/task-progress/?task_id=<task_id>" -H "Authorization: Bearer $TOKEN"
+```
+
+```json
+{"success": true, "message": "Batch 1 processing started", "task_id": "0db1bbbc-88ac-4b04-a6dc-b2f39ed04758"}
+{"success": true, "state": "SUCCESS", "progress": 100, "result": "[]"}
+```
+
+The empty result is what the stack returns without AirDNA credentials: the worker logs `AIRDNA_URL is not configured` and saves no rows.
+
+Filter listings and export them:
+
+```sh
+curl -s -X POST localhost:8000/api/rental_properties/filtered-list/ -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"status": "Approved", "min_profit": 1000}'
+curl -s "localhost:8000/api/rental_properties/download-csv/?status=Approved" -H "Authorization: Bearer $TOKEN"
+```
+
+```json
+{"count": 1, "next": null, "previous": null, "results": {"all_batch_ids": [1], "properties": [{"id": 1, "created_at_formatted": "November 09, 2026", "user_id": 1, "location": "22 Orchard Ln, Sampletown, FL 33000", "rent": 1850, "no_of_bedrooms": 1, "no_of_bathrooms": 1, "square_feet": 780, "property_zillow_link": "https://listings.example.com/22-orchard", "property_status": "Approved", "monthly_estimated_profit": "1120.50", "batch_id": 1, "...": "..."}]}}
+```
+
+```text
+Date,Batch Id,Location,Rent,Bedrooms,Bathrooms,Square Feet,Link,Adr,Utilities,Estimated Profit,Estimated Earnings,Yearly Rent Cost,Occupancy Rate,Zillow Property Status
+"November 09, 2026",1,"22 Orchard Ln, Sampletown, FL 33000",1850,1,1,780,https://listings.example.com/22-orchard,,,1120.50,,,,Approved
+```
+
+Invalid input is a 400 with the field name, and a missing token is a 401:
+
+```json
+{"start_date": "Use \"Month day, year\" (e.g., December 3, 2024)."}
+{"detail": "Authentication credentials were not provided."}
+```
+
+## How listings are scored
+
+For each uploaded row the worker asks AirDNA for projected annual revenue, then computes
+
+- utilities = bedrooms x 2,000 per year,
+- yearly cost = monthly rent x 12 + utilities,
+- monthly profit = (projected revenue - yearly cost) / 12,
+
+and marks the listing Approved when the monthly profit reaches 1,000 (one bedroom), 1,500 (two) or 2,000 (three or more), otherwise Rejected. Approved listings are pushed to a ClickUp list when ClickUp is configured. Rows without square footage are skipped.
+
+## Configuration
+
+Settings come from environment variables (or `.env`, which must stay untracked). `.env.example` lists every key.
+
+| Variable | Used for |
+| --- | --- |
+| `SECRET_KEY` | Required. Django signing key |
+| `ENVIRONMENT` | `development` (default), `staging` or `production`. Staging and production require `DATABASE_URL`, trust `X-Forwarded-Proto`, redirect to HTTPS and use secure cookies |
+| `DEBUG`, `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS` | Usual Django settings; CORS origins are a JSON list |
+| `DATABASE_URL` | PostgreSQL URL; development falls back to `development.sqlite3` |
+| `REDIS_URL` | Cache, Celery broker and result backend. `rediss://` URLs verify certificates |
+| `SECURE_SSL_REDIRECT`, `SECURE_HSTS_SECONDS` | HTTPS redirect (on by default when deployed) and opt-in HSTS |
+| `OPENAI_API_KEY` | Lease review, regulation notes and both chats (0.x `openai` client, `gpt-4`) |
+| `AIRDNA_URL`, `AIRDNA_API_KEY` | Listing enrichment |
+| `CLICKUP_URL`, `LIST_ID`, `TEAM_ID`, `ACCESS_TOKEN`, `APPROVED`, `ZILLOW_CUSTOM_ID`, `PROPERTY_STATUS_CUSTOM_ID` | ClickUp task creation for approved listings |
+| `ENABLE_DOCUMENT_UPLOADS`, `CLOUDINARY_*` | Lease document uploads; see below |
+
+The `Procfile` (release/web/worker) targets Heroku-style platforms.
+
+## Design notes and boundaries
+
+- **Ownership is enforced in querysets.** The lease, document, regulation and rental viewsets filter by owner for non-staff users, so another owner's record is a 404; customer routes answer 403 to other clients. Server-written fields (model output, chat history, document files and versions) are read-only through the API, and chat endpoints act on the object in the URL.
+- **Document uploads are off by default.** The Cloudinary uploader stores files publicly. `ENABLE_DOCUMENT_UPLOADS=1` is meant for synthetic demo files only; private storage, signed URLs, validation and retention rules would be needed for real leases.
+- **First login.** Accounts created by staff or clients must set a password through `update-password/{id}/` before that flag clears; profile edits do not clear it.
+- **Password reset is disabled.** The endpoint returns a uniform 503 without revealing whether an account exists, because there is no verified delivery or confirmation flow yet.
+- **Task ownership is cached.** A rental upload's task ID is tied to its submitter in Redis for 24 hours; unknown or expired task IDs are staff-only. Batch numbers come from an atomic Redis counter seeded from the database. A database table would make both durable.
+- **Model output is unverified.** The status of a lease or regulation is read from the model's text. Uploaded document text and addresses are sent to the configured providers, so demonstrate with synthetic data.
+
+If provider credentials from earlier versions of this code were ever deployed, rotate them at the providers.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
