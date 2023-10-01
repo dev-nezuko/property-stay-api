@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import re
 import openai
 from rest_framework import viewsets, status
@@ -284,7 +284,7 @@ class RegulationsViewSet(viewsets.ModelViewSet):
         if start_date:
             try:
                 start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
-                regulations = regulations.filter(created_at__gte=start_date)
+                regulations = regulations.filter(created_at__date__gte=start_date)
             except ValueError:
                 return Response({'detail': 'Invalid start date format. Use YYYY-MM-DD.'},
                                 status=status.HTTP_400_BAD_REQUEST)
@@ -292,13 +292,10 @@ class RegulationsViewSet(viewsets.ModelViewSet):
         if end_date:
             try:
                 end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
-                end_date = end_date + timedelta(days=1)  # Include the entire end day
-                regulations = regulations.filter(created_at__lte=end_date)
+                regulations = regulations.filter(created_at__date__lte=end_date)
             except ValueError:
                 return Response({'detail': 'Invalid end date format. Use YYYY-MM-DD.'},
                                 status=status.HTTP_400_BAD_REQUEST)
-        else:
-            end_date = datetime.now().date()
 
         # Filter by status if provided
         if status_value:

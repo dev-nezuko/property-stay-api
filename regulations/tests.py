@@ -78,3 +78,17 @@ class RegulationWriteProtectionTests(APITestCase):
         response = self.client.post('/api/regulations/', {'search': ''}, format='json')
         self.assertEqual(response.status_code, 400)
         self.assertIn('search', response.data)
+
+
+class RegulationSearchDateTests(APITestCase):
+    def test_date_range_uses_whole_days(self):
+        from datetime import datetime, timezone
+        owner = get_user_model().objects.create_user(email='reg-dates@example.test', password='Synthetic!456',
+                                                     user_type='client')
+        inside = Regulations.objects.create(user=owner, search='Inside')
+        outside = Regulations.objects.create(user=owner, search='Outside')
+        Regulations.objects.filter(pk=inside.pk).update(created_at=datetime(2024, 5, 9, 12, tzinfo=timezone.utc))
+        Regulations.objects.filter(pk=outside.pk).update(created_at=datetime(2024, 5, 10, 0, tzinfo=timezone.utc))
+        self.client.force_authenticate(owner)
+        response = self.client.get('/api/regulations/search/', {'start_date': '2024-05-09', 'end_date': '2024-05-09'})
+        self.assertEqual([row['search'] for row in response.data['results']], ['Inside'])

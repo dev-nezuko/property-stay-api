@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import openai
 from django.conf import settings
@@ -126,7 +126,7 @@ class LeaseViewSet(viewsets.ModelViewSet):
         if start_date:
             try:
                 start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
-                leases = leases.filter(created_at__gte=start_date)
+                leases = leases.filter(created_at__date__gte=start_date)
             except ValueError:
                 return Response(
                     {"detail": "Invalid start date format. Use YYYY-MM-DD."},
@@ -136,17 +136,12 @@ class LeaseViewSet(viewsets.ModelViewSet):
         if end_date:
             try:
                 end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
-                end_date = end_date + timedelta(
-                    days=1
-                )  # This will now represent the start of the next day
-                leases = leases.filter(created_at__lte=end_date)
+                leases = leases.filter(created_at__date__lte=end_date)
             except ValueError:
                 return Response(
                     {"detail": "Invalid end date format. Use YYYY-MM-DD."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-        else:
-            end_date = datetime.now().date()
 
         # Apply ordering to ensure consistency in pagination
         leases = leases.order_by("-created_at")

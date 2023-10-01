@@ -201,3 +201,25 @@ class DocumentWriteProtectionTests(APITestCase):
         self.assertEqual(self.document.version, 1)
         self.assertIsNone(self.document.gpt_response)
         self.assertEqual(self.document.chat_history, [])
+
+
+class LeaseSearchDateTests(APITestCase):
+    def setUp(self):
+        from datetime import datetime, timezone
+        self.owner = get_user_model().objects.create_user(email="dates@example.test", password="Synthetic!456",
+                                                          user_type="client")
+        self.lease = Lease.objects.create(user=self.owner, address1="3 Demo Way", city="Example", state="WA",
+                                          zip_code="00000")
+        late = Lease.objects.create(user=self.owner, address1="4 Demo Way", city="Example", state="WA",
+                                    zip_code="00000")
+        Lease.objects.filter(pk=self.lease.pk).update(created_at=datetime(2024, 3, 1, 23, 30, tzinfo=timezone.utc))
+        Lease.objects.filter(pk=late.pk).update(created_at=datetime(2024, 3, 2, 0, 0, tzinfo=timezone.utc))
+        self.client.force_authenticate(self.owner)
+
+    def test_end_date_is_inclusive_and_stops_at_midnight(self):
+        response = self.client.get("/api/leases/search/", {"start_date": "2024-03-01", "end_date": "2024-03-01"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([row["id"] for row in response.data["results"]], [self.lease.pk])
+
+    def test_bad_date_is_a_400(self):
+        self.assertEqual(self.client.get("/api/leases/search/", {"end_date": "03/01/2024"}).status_code, 400)
