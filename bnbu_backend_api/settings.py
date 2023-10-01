@@ -37,13 +37,19 @@ PROPERTY_STATUS_CUSTOM_ID = os.getenv("PROPERTY_STATUS_CUSTOM_ID")
 # Determine the environment: development, staging
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
-
-# SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv("SECRET_KEY")
 
 DEBUG = os.getenv("DEBUG", "False") == "True"
+DEPLOYED = ENVIRONMENT in ["staging", "production"]
+
+if DEPLOYED:
+    # Heroku-style routers terminate TLS and forward the original scheme in this header.
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SECURE_SSL_REDIRECT = os.getenv("SECURE_SSL_REDIRECT", "True") == "True"
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    # Opt in explicitly: HSTS is hard to undo once browsers have cached it.
+    SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "0"))
 
 ALLOWED_HOSTS = [host.strip() for host in os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if host.strip()]
 
@@ -108,8 +114,7 @@ WSGI_APPLICATION = "bnbu_backend_api.wsgi.application"
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
 # Database configuration
-if ENVIRONMENT in ["staging", "production"]:
-    # Use DATABASE_URL environment variable for staging
+if DEPLOYED:
     DATABASES = {"default": dj_database_url.config(default=os.getenv("DATABASE_URL"))}
 else:
     # Default development database settings (override with DATABASE_URL if available)
