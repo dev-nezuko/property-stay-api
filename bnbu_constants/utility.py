@@ -50,6 +50,8 @@ def process_airdna_api(bulk_queries):
         "Authorization": f"Bearer {settings.AIRDNA_API_KEY}",
     }
     payload = {"queries": bulk_queries}
+    if not settings.AIRDNA_URL:
+        raise ValueError("AIRDNA_URL is not configured; rental rows cannot be enriched.")
 
     for attempt in range(1, AIRDNA_ATTEMPTS + 1):
         try:

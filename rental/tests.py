@@ -183,3 +183,27 @@ class RentalTaskTests(APITestCase):
                 patch.object(process_rental_properties_task, 'update_state'):
             self.assertEqual(process_rental_properties_task(rows, {'user': 1, 'new_batch_id': 1}), '[]')
         self.assertFalse(RentalProperty.objects.exists())
+
+
+class ProviderConfigurationTests(APITestCase):
+    def test_unconfigured_airdna_fails_fast_without_requests(self):
+        from bnbu_constants.utility import process_airdna_api
+        with patch('bnbu_constants.utility.requests.post') as post, self.settings(AIRDNA_URL=''):
+            with self.assertRaisesMessage(ValueError, 'AIRDNA_URL is not configured'):
+                process_airdna_api([{'address': 'x'}])
+        post.assert_not_called()
+
+    def test_unconfigured_clickup_is_skipped(self):
+        from .tasks import upload_properties_to_clickup
+        with patch('rental.tasks.requests.post') as post, self.settings(CLICKUP_URL=None):
+            self.assertIsNone(upload_properties_to_clickup('Demo', 'https://example.invalid', 'Approved'))
+        post.assert_not_called()
+
+    def test_airdna_retries_then_gives_up(self):
+        import requests
+        from bnbu_constants.utility import AIRDNA_ATTEMPTS, process_airdna_api
+        with patch('bnbu_constants.utility.requests.post', side_effect=requests.ConnectionError('offline')) as post, \
+                self.settings(AIRDNA_URL='https://airdna.example.invalid', AIRDNA_API_KEY='placeholder'):
+            with self.assertRaises(ValueError):
+                process_airdna_api([{'address': 'x'}])
+        self.assertEqual(post.call_count, AIRDNA_ATTEMPTS)

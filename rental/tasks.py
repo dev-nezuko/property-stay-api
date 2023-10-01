@@ -139,6 +139,9 @@ def process_rental_properties_task(self, cleaned_df_json, context):
 
 
 def upload_properties_to_clickup(task_name, zillow_link, property_status):
+    if not settings.CLICKUP_URL:
+        logger.info("CLICKUP_URL is not configured; not pushing %s to ClickUp.", task_name)
+        return None
     query_params = {
         "custom_task_ids": True,
         "team_id": settings.TEAM_ID,
