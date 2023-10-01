@@ -36,17 +36,6 @@ class UserSerializer(serializers.ModelSerializer):
         user.save()
         return user
 
-    def update(self, instance, validated_data):
-        """Update user information and optionally change the password."""
-        password = validated_data.pop('password', None)
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        if password:
-            instance.set_password(password)  # Update password if provided
-        instance.is_first_login = False  # Reset after password change
-        instance.save()
-        return instance
-
 # class ClientSerializer(UserSerializer):
 #     class Meta(UserSerializer.Meta):
 #         fields = ['id', 'email', 'user_type']  # Limit fields for clients

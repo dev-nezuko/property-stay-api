@@ -173,3 +173,46 @@ class CustomerListScopeTests(APITestCase):
         response = self.client.get(reverse("customer-list", kwargs={"client_id": self.client_b.pk}))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual([row["email"] for row in response.data], ["cust-b@example.test"])
+
+
+class FirstLoginFlagTests(APITestCase):
+    def setUp(self):
+        self.admin = CustomUser.objects.create_superuser(email="flag-admin@example.test", password="Synthetic!456")
+        self.client_user = CustomUser.objects.create_user(email="flag-client@example.test", password="Synthetic!456",
+                                                          user_type="client", is_first_login=False)
+        self.customer = CustomUser.objects.create_user(email="flag-customer@example.test",
+                                                       password="Synthetic!456", user_type="customer",
+                                                       client=self.client_user)
+
+    def test_admin_profile_edit_keeps_first_login_requirement(self):
+        self.client.force_authenticate(self.admin)
+        response = self.client.patch(reverse("user-detail", kwargs={"pk": self.customer.pk}),
+                                     {"first_name": "Renamed"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.first_name, "Renamed")
+        self.assertTrue(self.customer.is_first_login)
+
+    def test_client_customer_edit_keeps_first_login_requirement(self):
+        self.client.force_authenticate(self.client_user)
+        url = reverse("customer-detail", kwargs={"client_id": self.client_user.pk, "pk": self.customer.pk})
+        response = self.client.put(url, {"email": self.customer.email, "last_name": "Edited"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.customer.refresh_from_db()
+        self.assertTrue(self.customer.is_first_login)
+
+
+class TokenLoginTests(APITestCase):
+    def test_email_login_issues_tokens_and_inactive_accounts_are_refused(self):
+        CustomUser.objects.create_user(email="active@example.test", password="Synthetic!456")
+        CustomUser.objects.create_user(email="inactive@example.test", password="Synthetic!456", is_active=False)
+        ok = self.client.post(reverse("token_obtain_pair"),
+                              {"email": "active@example.test", "password": "Synthetic!456"}, format="json")
+        self.assertEqual(ok.status_code, status.HTTP_200_OK)
+        self.assertIn("access", ok.data)
+        refused = self.client.post(reverse("token_obtain_pair"),
+                                   {"email": "inactive@example.test", "password": "Synthetic!456"}, format="json")
+        self.assertEqual(refused.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_template_login_route_without_a_template_is_gone(self):
+        self.assertEqual(self.client.get("/account/login/").status_code, status.HTTP_404_NOT_FOUND)

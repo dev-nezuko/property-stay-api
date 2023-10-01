@@ -223,10 +223,9 @@ CORS_ALLOW_HEADERS = [
     "x-requested-with",
 ]
 
-AUTHENTICATION_BACKENDS = [
-    "accounts.backends.EmailBackend",
-    "django.contrib.auth.backends.ModelBackend",
-]
+# ModelBackend authenticates by email because CustomUser.USERNAME_FIELD is "email",
+# and unlike the old custom backend it refuses inactive accounts.
+AUTHENTICATION_BACKENDS = ["django.contrib.auth.backends.ModelBackend"]
 
 # Use the console email backend for development to print emails to the console instead of sending them.
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
