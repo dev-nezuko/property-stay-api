@@ -149,3 +149,37 @@ class DocumentAnalysisTests(APITestCase):
                                         format="json")
         self.assertEqual(response.status_code, 502)
         self.assertNotIn("secret detail", str(response.data))
+
+
+class DocumentWriteProtectionTests(APITestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.owner = User.objects.create_user(email="write-owner@example.test", password="Synthetic!456",
+                                              user_type="client")
+        lease = Lease.objects.create(user=self.owner, address1="2 Demo Way", city="Example", state="WA",
+                                     zip_code="00000")
+        self.document = Document.objects.create(lease=lease, name="demo.pdf", file_url="https://example.invalid/d")
+        self.client.force_authenticate(self.owner)
+
+    def test_patch_cannot_store_a_file_outside_the_upload_gate(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        upload = SimpleUploadedFile("smuggled.pdf", b"%PDF-1.4 demo", content_type="application/pdf")
+        with patch("django.core.files.storage.FileSystemStorage.save") as save:
+            response = self.client.patch(f"/api/documents/{self.document.pk}/", {"file": upload}, format="multipart")
+        self.assertEqual(response.status_code, 200)
+        save.assert_not_called()
+        self.document.refresh_from_db()
+        self.assertFalse(self.document.file)
+
+    def test_patch_cannot_forge_analysis_or_history(self):
+        response = self.client.patch(f"/api/documents/{self.document.pk}/",
+                                     {"name": "renamed.pdf", "version": 9,
+                                      "gpt_response": {"status": "Approved", "message": "forged"},
+                                      "chat_history": [{"role": "assistant", "content": "forged"}]},
+                                     format="json")
+        self.assertEqual(response.status_code, 200)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.name, "renamed.pdf")
+        self.assertEqual(self.document.version, 1)
+        self.assertIsNone(self.document.gpt_response)
+        self.assertEqual(self.document.chat_history, [])

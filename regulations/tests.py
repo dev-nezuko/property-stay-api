@@ -44,3 +44,26 @@ class RegulationChatTests(APITestCase):
         response = self.client.post(f'/api/regulations/{self.mine.pk}/chat/',
                                     {'message': 'Hi', 'regulation_id': self.theirs.pk}, format='json')
         self.assertEqual(response.status_code, 400)
+
+
+class RegulationWriteProtectionTests(APITestCase):
+    def test_owner_cannot_forge_model_output(self):
+        owner = get_user_model().objects.create_user(email='forge@example.test', password='Synthetic!456',
+                                                     user_type='client')
+        row = Regulations.objects.create(user=owner, search='Demo city')
+        self.client.force_authenticate(owner)
+        response = self.client.patch(f'/api/regulations/{row.pk}/',
+                                     {'gpt_response': {'message': 'forged'}, 'chat_history': [{'role': 'x'}]},
+                                     format='json')
+        self.assertEqual(response.status_code, 200)
+        row.refresh_from_db()
+        self.assertIsNone(row.gpt_response)
+        self.assertEqual(row.chat_history, [])
+
+    def test_create_still_requires_a_search(self):
+        owner = get_user_model().objects.create_user(email='blank@example.test', password='Synthetic!456',
+                                                     user_type='client')
+        self.client.force_authenticate(owner)
+        response = self.client.post('/api/regulations/', {'search': ''}, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('search', response.data)

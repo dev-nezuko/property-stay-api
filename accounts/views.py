@@ -107,8 +107,9 @@ class CustomerListView(APIView):
         elif request.user.is_staff:
             # Admin gets all customers with valid client association
             customers = CustomUser.objects.filter(user_type='customer').exclude(client__isnull=True).order_by('id')
+        elif client_id is not None and client_id != request.user.pk:
+            raise PermissionDenied("Cannot list customers of another client.")
         else:
-            # Clients see only their own customers
             customers = CustomUser.objects.filter(client=request.user, user_type='customer').order_by('id')
 
         # Use CustomerSerializer to serialize the customer data

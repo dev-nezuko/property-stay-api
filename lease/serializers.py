@@ -14,7 +14,10 @@ class DocumentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Document
-        fields = ['id', 'lease_id', 'name', 'file', 'version', 'uploaded_at' ,'status', 'gpt_response', 'chat_history']
+        fields = ['id', 'lease_id', 'name', 'file', 'version', 'uploaded_at', 'status', 'gpt_response', 'chat_history']
+        # Files only arrive through the lease upload actions, which enforce the upload opt-in;
+        # analysis output and chat history are written by the server, never by clients.
+        read_only_fields = ['file', 'version', 'uploaded_at', 'gpt_response', 'chat_history']
 
 class LeaseSerializer(serializers.ModelSerializer):
     num_of_docs = serializers.IntegerField(read_only=True)

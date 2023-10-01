@@ -152,3 +152,24 @@ class SecurityRegressionTests(APITestCase):
         self.client.force_authenticate(customer)
         response=self.client.post(reverse("customer-create",kwargs={"client_id":self.other.pk}),{"email":"blocked@example.test"},format="json")
         self.assertEqual(response.status_code,403)
+
+
+class CustomerListScopeTests(APITestCase):
+    def setUp(self):
+        self.client_a = CustomUser.objects.create_user(email="a@example.test", password="Synthetic!456",
+                                                       user_type="client")
+        self.client_b = CustomUser.objects.create_user(email="b@example.test", password="Synthetic!456",
+                                                       user_type="client")
+        CustomUser.objects.create_user(email="cust-b@example.test", password="Synthetic!456",
+                                       user_type="customer", client=self.client_b)
+
+    def test_client_cannot_list_another_clients_customers(self):
+        self.client.force_authenticate(self.client_a)
+        response = self.client.get(reverse("customer-list", kwargs={"client_id": self.client_b.pk}))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_client_lists_own_customers(self):
+        self.client.force_authenticate(self.client_b)
+        response = self.client.get(reverse("customer-list", kwargs={"client_id": self.client_b.pk}))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([row["email"] for row in response.data], ["cust-b@example.test"])
