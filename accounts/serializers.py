@@ -3,6 +3,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+import secrets
 
 # Get the CustomUser model
 CustomUser = get_user_model()
@@ -18,11 +19,20 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'is_active', 'is_first_login']  # These fields cannot be updated via the serializer
 
     def create(self, validated_data):
-        """Create a new user with a temporary password and mark as first login."""
-        password = 'temporary_password123'  # Set a temporary password
+        """
+        Create a new user with a secure temporary password and mark as first login.
+        A cryptographically secure random password is generated when no explicit
+        password is provided so that newly created accounts never share a hard-coded
+        default credential.
+        """
+        password = validated_data.pop("password", None)
+        if not password:
+            # Generate a random password instead of using a predictable default.
+            password = secrets.token_urlsafe(16)
+
         user = CustomUser(**validated_data)
-        user.set_password(password)  # Set password to the user
-        user.is_first_login = True  # Mark as first login
+        user.set_password(password)
+        user.is_first_login = True
         user.save()
         return user
 

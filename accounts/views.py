@@ -33,15 +33,16 @@ class UserListCreateView(APIView):
 
     def post(self, request):
         serializer = UserSerializer(data=request.data)
-        if serializer.is_valid():
-            user = serializer.save()
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        user = serializer.save()
+        # Newly created users should be active by default for the admin workflow.
+        if not user.is_active:
             user.is_active = True
-            # Set a temporary password
-            temporary_password = "temporary_password123"
-            user.set_password(temporary_password)
-            user.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            user.save(update_fields=["is_active"])
+
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 class UserDetailView(RetrieveUpdateDestroyAPIView):
     queryset = CustomUser.objects.all()
