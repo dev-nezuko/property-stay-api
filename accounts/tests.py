@@ -76,3 +76,51 @@ class FirstTimePasswordUpdateTests(APITestCase):
 
         response = self.client.post(url, payload, format="json")
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class CustomerAccessControlTests(APITestCase):
+    def setUp(self):
+        self.admin = CustomUser.objects.create_superuser(
+            email="admin2@example.com",
+            password="AdminPass!123",
+        )
+        self.client_user = CustomUser.objects.create_user(
+            email="client@example.com",
+            password="ClientPass!123",
+            user_type="client",
+            is_first_login=False,
+        )
+        self.other_client_user = CustomUser.objects.create_user(
+            email="other-client@example.com",
+            password="ClientPass!123",
+            user_type="client",
+            is_first_login=False,
+        )
+        self.customer = CustomUser.objects.create_user(
+            email="customer@example.com",
+            password="CustomerPass!123",
+            user_type="customer",
+            client=self.client_user,
+            is_first_login=False,
+        )
+
+    def test_admin_can_access_any_customer(self):
+        self.client.force_authenticate(user=self.admin)
+        url = reverse(
+            "customer-detail",
+            kwargs={"client_id": self.client_user.pk, "pk": self.customer.pk},
+        )
+
+        response = self.client.get(url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["email"], self.customer.email)
+
+    def test_client_cannot_access_customer_of_another_client(self):
+        self.client.force_authenticate(user=self.other_client_user)
+        url = reverse(
+            "customer-detail",
+            kwargs={"client_id": self.client_user.pk, "pk": self.customer.pk},
+        )
+
+        response = self.client.get(url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
