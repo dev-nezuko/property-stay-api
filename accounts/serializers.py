@@ -15,7 +15,7 @@ class UserSerializer(serializers.ModelSerializer):
     """
     class Meta:
         model = CustomUser
-        fields = ['id', 'email', 'username', 'first_name', 'last_name', 'user_type', 'is_active', 'is_first_login']
+        fields = ['id', 'email', 'first_name', 'last_name', 'user_type', 'is_active', 'is_first_login']
         read_only_fields = ['id', 'is_active', 'is_first_login']  # These fields cannot be updated via the serializer
 
     def create(self, validated_data):
@@ -53,7 +53,8 @@ class UserSerializer(serializers.ModelSerializer):
 
 class CustomerSerializer(UserSerializer):
     class Meta(UserSerializer.Meta):
-        fields = ['id', 'email', 'username', 'first_name', 'last_name', 'user_type', 'is_active', 'is_first_login', 'client']  # Include client field for customers
+        read_only_fields = ['id', 'is_active', 'is_first_login', 'user_type', 'client']
+        fields = ['id', 'email', 'first_name', 'last_name', 'user_type', 'is_active', 'is_first_login', 'client']  # Include client field for customers
 
 
 class PasswordChangeSerializer(serializers.Serializer):
@@ -82,7 +83,7 @@ class PasswordChangeSerializer(serializers.Serializer):
             raise serializers.ValidationError({"confirm_new_password": "New password and confirm password do not match."})
 
         return data
-    
+
     def save(self, **kwargs):
         """Set the new password for the user."""
         user = self.context['request'].user
@@ -118,11 +119,14 @@ class FirstTimePasswordUpdateSerializer(serializers.ModelSerializer):
         """Ensure the new password and confirmation match."""
         new_password = data.get('new_password')
         confirm_password = data.get('confirm_password')
-        
+
         if new_password != confirm_password:
             raise serializers.ValidationError("Passwords do not match.")
-        
-        # Additional validations for password complexity can be added here
+
+        try:
+            validate_password(new_password, user=self.instance)
+        except ValidationError as error:
+            raise serializers.ValidationError({"new_password": error.messages})
         return data
 
     def save(self, **kwargs):
@@ -133,5 +137,5 @@ class FirstTimePasswordUpdateSerializer(serializers.ModelSerializer):
         user.save()
         return user
 
-    
+
 

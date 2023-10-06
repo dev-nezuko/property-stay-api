@@ -9,6 +9,7 @@ class RentalPropertySerializer(serializers.ModelSerializer):
     class Meta:
         model = RentalProperty
         fields = "__all__"
+        read_only_fields = ["user_id"]
         extra_fields = ['created_at_formatted']  # Include additional formatted field
 
     def get_created_at_formatted(self, obj):

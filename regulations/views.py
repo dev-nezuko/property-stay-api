@@ -50,8 +50,8 @@ class RegulationsViewSet(viewsets.ModelViewSet):
         # Prepare the system message and user input
         system_message = """
                 This GPT acts as a knowledgeable consultant specializing in short-term rental (STR) laws, providing users with concise and accurate information, advice, and strategies related to the legality of short-term rentals in various areas.
-                Each response begins with a clear status update of the STR legality in the specific area: 
-                
+                Each response begins with a clear status update of the STR legality in the specific area:
+
                 'SHORT TERM RENTAL ALLOWED,' 'SHORT TERM RENTAL ALLOWED WITH RESTRICTIONS,' or 'SHORT TERM RENTAL NOT ALLOWED.'
 
                 After this, the GPT offers bullet-point summaries of the relevant regulations, ensuring that users can quickly grasp the key points.
@@ -94,7 +94,7 @@ class RegulationsViewSet(viewsets.ModelViewSet):
             # Ensure created_time is a string in ISO 8601 format
             if isinstance(created_time, (int, float)):
                 created_time = datetime.fromtimestamp(created_time, tz=timezone.utc).isoformat()
-            
+
             timestamp = datetime.now(timezone.utc).isoformat()
 
             if re.search(r'\bSHORT TERM RENTAL ALLOWED WITH RESTRICTIONS\b', gpt_content, re.IGNORECASE):
@@ -117,7 +117,7 @@ class RegulationsViewSet(viewsets.ModelViewSet):
                 'status': 'error',
                 'message': str(e)
             }
-    
+
     @action(detail=True, methods=['post'], url_path='chat')
     def chat_with_gpt(self, request, pk=None):
         """
@@ -129,8 +129,8 @@ class RegulationsViewSet(viewsets.ModelViewSet):
         regulation_id = serializer.validated_data.get('regulation_id')
         user_message = serializer.validated_data.get('message')
 
-        regulation = get_object_or_404(Regulations, id=regulation_id)
-    
+        regulation = get_object_or_404(self.get_queryset(), id=regulation_id)
+
         # Fetch the summary from the regulation's GPT response
         gpt_response_data = regulation.gpt_response if regulation.gpt_response else {}
         summary = gpt_response_data.get('message', 'No summary available.')
@@ -152,16 +152,16 @@ class RegulationsViewSet(viewsets.ModelViewSet):
         - Offer **strategic advice** on how local rules apply to **property owners, renters, or agents**.
         - Suggest additional resources, searches, or research strategies for **legal compliance**.
         - Clarify the specific residency or occupancy requirements necessary to **qualify a property** for STR.
-        
+
         Here’s a summary of previous analysis:
         {summary}
 
         Please assist the user with further queries regarding the regulation. Provide relevant responses based on the summary and chat history.
         """
-        
+
         # Initialize chat history
         chat_history = regulation.chat_history or []
-        
+
         # Add user's message to chat history
         user_message_entry = {
             'role': 'user',
@@ -206,7 +206,7 @@ class RegulationsViewSet(viewsets.ModelViewSet):
         """
         Retrieve chat history for a specific regulation.
         """
-        regulation = get_object_or_404(Regulations, id=pk)
+        regulation = get_object_or_404(self.get_queryset(), id=pk)
 
         gpt_response_data = regulation.gpt_response if regulation.gpt_response else {}
         # Ensure gpt_response_data is a dictionary before accessing its keys
@@ -230,7 +230,7 @@ class RegulationsViewSet(viewsets.ModelViewSet):
             'chat_history': chat_history,
         }
         return Response(response_data, status=status.HTTP_200_OK)
-    
+
     @action(detail=False, methods=['get'], url_path='search')
     def search(self, request):
         """
@@ -243,7 +243,7 @@ class RegulationsViewSet(viewsets.ModelViewSet):
         status_value = request.query_params.get('status')
 
         # Initial queryset
-        regulations = Regulations.objects.all()
+        regulations = self.get_queryset()
 
         # Filter by search
         if query:

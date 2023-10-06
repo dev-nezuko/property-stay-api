@@ -29,4 +29,4 @@ class IsAdminOrOwnData(permissions.BasePermission):
         if request.user.is_staff:
             return True
         # Non-admin users can access only their own data
-        return obj.user == request.user
+        return obj.user_id == request.user.pk

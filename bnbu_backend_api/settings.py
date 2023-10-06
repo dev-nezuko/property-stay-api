@@ -35,7 +35,7 @@ CLICKUP_BASE_URL = os.getenv("CLICKUP_URL")  # Base URL with placeholder
 LIST_ID = os.getenv("LIST_ID")  # Load the list ID
 
 # Format the URL dynamically by replacing {list_id} with the actual LIST_ID
-CLICKUP_URL = CLICKUP_BASE_URL.format(list_id=LIST_ID)
+CLICKUP_URL = CLICKUP_BASE_URL.format(list_id=LIST_ID) if CLICKUP_BASE_URL else None
 
 TEAM_ID = os.getenv("TEAM_ID")
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
@@ -238,8 +238,8 @@ MODEL_NAME = os.getenv("MODEL_NAME")
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": os.environ.get("REDIS_URL"),
-        "OPTIONS": {"ssl_cert_reqs": None},
+        "LOCATION": os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
+
     }
 }
 
@@ -257,12 +257,14 @@ logging.basicConfig(
 # Step 2: Create a logger instance
 logger = logging.getLogger(__name__)
 
+ENABLE_DOCUMENT_UPLOADS = os.getenv("ENABLE_DOCUMENT_UPLOADS", "0") == "1"
+
 
 # Cloudinary configuration from .env file
 cloudinary.config(
-    cloud_name=env('CLOUDINARY_CLOUD_NAME'),
-    api_key=env('CLOUDINARY_API_KEY'),
-    api_secret=env('CLOUDINARY_API_SECRET'),
+    cloud_name=env('CLOUDINARY_CLOUD_NAME', default=''),
+    api_key=env('CLOUDINARY_API_KEY', default=''),
+    api_secret=env('CLOUDINARY_API_SECRET', default=''),
 )
 
 FILE_UPLOAD_MAX_MEMORY_SIZE = 52428800

@@ -124,3 +124,31 @@ class CustomerAccessControlTests(APITestCase):
 
         response = self.client.get(url, format="json")
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class SecurityRegressionTests(APITestCase):
+    def setUp(self):
+        self.owner=CustomUser.objects.create_user(email="owner@example.test",password="SyntheticPass!456",user_type="client")
+        self.other=CustomUser.objects.create_user(email="other@example.test",password="SyntheticPass!789",user_type="client")
+        self.client.force_authenticate(self.other)
+    def test_first_login_patch_and_put_cannot_bypass_owner_check(self):
+        url=reverse("update-password",kwargs={"pk":self.owner.pk})
+        for method in [self.client.patch,self.client.put]:
+            self.assertEqual(method(url,{"new_password":"Replacement!456","confirm_password":"Replacement!456"},format="json").status_code,405)
+        self.owner.refresh_from_db();self.assertTrue(self.owner.check_password("SyntheticPass!456"))
+    def test_password_reset_never_returns_a_token_or_enumerates_accounts(self):
+        self.client.force_authenticate(None)
+        a=self.client.post(reverse("password-reset"),{"email":self.owner.email},format="json")
+        b=self.client.post(reverse("password-reset"),{"email":"missing@example.test"},format="json")
+        self.assertEqual(a.status_code,503);self.assertEqual(a.data,b.data);self.assertNotIn("reset_link",a.data)
+    def test_customer_creation_cannot_promote_or_choose_another_owner(self):
+        url=reverse("customer-create",kwargs={"client_id":self.other.pk})
+        response=self.client.post(url,{"email":"new@example.test","user_type":"admin","client":self.owner.pk},format="json")
+        self.assertEqual(response.status_code,201)
+        created=CustomUser.objects.get(email="new@example.test")
+        self.assertEqual(created.user_type,"customer");self.assertEqual(created.client,self.other)
+    def test_customer_cannot_create_customers(self):
+        customer=CustomUser.objects.create_user(email="customer3@example.test",password="SyntheticPass!456",user_type="customer",client=self.other)
+        self.client.force_authenticate(customer)
+        response=self.client.post(reverse("customer-create",kwargs={"client_id":self.other.pk}),{"email":"blocked@example.test"},format="json")
+        self.assertEqual(response.status_code,403)

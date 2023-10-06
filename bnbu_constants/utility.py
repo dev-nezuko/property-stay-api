@@ -1,7 +1,7 @@
 # /Users/dev/Documents/bnbu-backend-api/bnbu_backend_api/bnbu_constants/utility.py
 import bnbu_constants.constants as constants
-import pandas as pd 
-from bnbu_backend_api.settings import AIRDNA_URL, AIRDNA_API_KEY
+import pandas as pd
+from django.conf import settings
 import requests
 
 def validate_file_type(file):
@@ -42,7 +42,7 @@ def clean_price(price):
 def process_airdna_api(bulk_queries):
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {AIRDNA_API_KEY}",
+        "Authorization": f"Bearer {settings.AIRDNA_API_KEY}",
     }
     payload = {"queries": bulk_queries}
 
@@ -52,7 +52,7 @@ def process_airdna_api(bulk_queries):
     print("=====> ", bulk_queries)
     while retry_count > retries:
         try:
-            response = requests.post(AIRDNA_URL, json=payload, headers=headers)
+            response = requests.post(settings.AIRDNA_URL, json=payload, headers=headers)
             response.raise_for_status()
             # return response.json()["payload"]["results"]
             results = response.json()["payload"]["results"]

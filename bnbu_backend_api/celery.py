@@ -20,14 +20,14 @@ app.conf.update(
     result_backend=REDIS_URL,
     broker_use_ssl=(
         {
-            "ssl_cert_reqs": ssl.CERT_NONE,
+            "ssl_cert_reqs": ssl.CERT_REQUIRED,
         }
         if USE_SSL
         else None
     ),
     redis_backend_use_ssl=(
         {
-            "ssl_cert_reqs": ssl.CERT_NONE,
+            "ssl_cert_reqs": ssl.CERT_REQUIRED,
         }
         if USE_SSL
         else None

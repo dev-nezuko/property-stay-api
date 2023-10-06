@@ -28,7 +28,7 @@ class LeaseViewSet(viewsets.ModelViewSet):
     pagination_class = PageNumberPagination
     serializer_class = LeaseSerializer
 
-    
+
     def get_queryset(self):
         """
         Restrict non-admin users to only their data and apply ordering.
@@ -106,7 +106,7 @@ class LeaseViewSet(viewsets.ModelViewSet):
         end_date = request.query_params.get("end_date")
         status_value = request.query_params.get("status")
 
-        leases = Lease.objects.all()
+        leases = self.get_queryset()
 
         # Filter by address if provided (search in both address1 and address2)
         if address:
@@ -161,6 +161,13 @@ class LeaseViewSet(viewsets.ModelViewSet):
 
 
 class DocumentViewSet(viewsets.ModelViewSet):
+    def get_queryset(self):
+        rows = Document.objects.select_related('lease').order_by('-uploaded_at')
+        return rows if self.request.user.is_staff else rows.filter(lease__user=self.request.user)
+
+    def create(self, request, *args, **kwargs):
+        return Response({'detail': 'Upload documents through the owning lease.'}, status=405)
+
     queryset = Document.objects.all().order_by("-uploaded_at")
     serializer_class = DocumentSerializer
     permission_classes = [IsAuthenticated]
@@ -170,28 +177,16 @@ class DocumentViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"], url_path=r"preview/(?P<document_id>\d+)")
     def preview_document(self, request, document_id=None):
-        print(f"Attempting to preview document with ID: {document_id}")
-        
+
         try:
-            document = Document.objects.get(id=document_id)
-            print(f"Document found: {document}")
+            document = get_object_or_404(self.get_queryset(), id=document_id)
         except Document.DoesNotExist:
-            print("Document not found in the database.")
             return Response(
                 {"detail": "Document not found."}, status=status.HTTP_404_NOT_FOUND
             )
 
-        # Check if the document has a file_url
         if document.file_url:
-            print(f"Returning document file URL: {document.file_url}")
-
-            # Check if the document has a file_url
-        if document.file_url:
-            print(f"Returning document file URL: {document.file_url}")
-            return Response(
-                {"file_url": document.file_url}, 
-                status=status.HTTP_200_OK
-            )
+            return Response({"file_url": document.file_url}, status=status.HTTP_200_OK)
 
         return Response(
             {"detail": "Document file not found."}, status=status.HTTP_404_NOT_FOUND
@@ -202,7 +197,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["get"], url_path=r"lease/(?P<lease_id>\d+)/documents")
     def list_document_names(self, request, lease_id=None):
         # Fetch documents related to the specified lease ID
-        documents = Document.objects.filter(lease_id=lease_id).order_by("version")
+        documents = self.get_queryset().filter(lease_id=lease_id).order_by("version")
 
         if not documents.exists():
             return Response(
@@ -239,7 +234,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
             )
 
         for document_id in document_ids:
-            document = get_object_or_404(Document, pk=document_id)
+            document = get_object_or_404(self.get_queryset(), pk=document_id)
 
             # Check if the document has a file
             if not document.file_url:
@@ -269,7 +264,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         user_message = serializer.validated_data.get("message")
 
         # Fetch the document
-        document = get_object_or_404(Document, id=document_id)
+        document = get_object_or_404(self.get_queryset(), id=document_id)
 
         # Fetch the summary from the document's GPT review response
         gpt_response_data = document.gpt_response if document.gpt_response else {}
@@ -341,7 +336,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         """
         Retrieve chat history for a specific regulation.
         """
-        document = get_object_or_404(Document, id=pk)
+        document = get_object_or_404(self.get_queryset(), id=pk)
 
         gpt_response_data = document.gpt_response if document.gpt_response else {}
 

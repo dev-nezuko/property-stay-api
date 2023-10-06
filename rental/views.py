@@ -17,6 +17,8 @@ from rest_framework.permissions import IsAuthenticated
 from rental.tasks import process_rental_properties_task
 import csv
 from celery.result import AsyncResult
+from django.core.cache import cache
+from rest_framework.exceptions import PermissionDenied
 
 class RentalPropertyPagination(PageNumberPagination):
     page_size = 10  # Default page size
@@ -38,7 +40,7 @@ class RentalPropertyPagination(PageNumberPagination):
             return self.page_size
 
         # Ensure the page size does not exceed the maximum page size
-        return min(page_size, self.max_page_size)
+        return max(1, min(page_size, self.max_page_size))
 
 class RentalPropertyViewSet(viewsets.ModelViewSet):
     queryset = RentalProperty.objects.all().order_by('-created_at')
@@ -46,6 +48,13 @@ class RentalPropertyViewSet(viewsets.ModelViewSet):
     serializer_class = RentalPropertySerializer
     pagination_class = RentalPropertyPagination
 
+
+    def get_queryset(self):
+        rows = RentalProperty.objects.all().order_by('-created_at')
+        return rows if self.request.user.is_staff else rows.filter(user_id=self.request.user.pk)
+
+    def perform_create(self, serializer):
+        serializer.save(user_id=self.request.user.pk)
 
     @action(detail=False, methods=['post'], url_path='upload-properties')
     def upload_rental_properties(self, request):
@@ -84,14 +93,17 @@ class RentalPropertyViewSet(viewsets.ModelViewSet):
 
         # Trigger Celery task
         task = process_rental_properties_task.delay(df.to_json(orient='records'), context)
+        cache.set('rental-task-owner:' + task.id, request.user.pk, timeout=86400)
 
         return Response({"success": True, "message": f"Batch {new_batch_id} processing started", "task_id": task.id}, status=status.HTTP_202_ACCEPTED)
-    
+
     @action(detail=False, methods=['get'], url_path='task-result')
     def get_task_result(self, request):
         task_id = request.query_params.get("task_id")
         if not task_id:
             return Response({"success": False, "message": "Task ID is required"}, status=status.HTTP_400_BAD_REQUEST)
+        if not request.user.is_staff and cache.get('rental-task-owner:' + task_id) != request.user.pk:
+            raise PermissionDenied('Task is not owned by this account.')
         task_result = AsyncResult(task_id)
         if task_result.state == "PENDING":
             return Response({"success": False, "message": "Task is still pending"}, status=status.HTTP_202_ACCEPTED)
@@ -101,7 +113,7 @@ class RentalPropertyViewSet(viewsets.ModelViewSet):
             return Response({"success": True, "message": "Task completed", "result": task_result.result}, status=status.HTTP_200_OK)
         else:
             return Response({"success": True, "message": f"Task is {task_result.state}", "result": task_result.result}, status=status.HTTP_200_OK)
-        
+
     @action(detail=False, methods=['get'], url_path='task-progress')
     def task_progress(self, request):
         task_id = request.query_params.get("task_id")
@@ -109,8 +121,10 @@ class RentalPropertyViewSet(viewsets.ModelViewSet):
             return Response({"success": False, "message": "Task ID is required"}, status=status.HTTP_400_BAD_REQUEST)
 
         # Fetch task result using task_id
+        if not request.user.is_staff and cache.get('rental-task-owner:' + task_id) != request.user.pk:
+            raise PermissionDenied('Task is not owned by this account.')
         task_result = AsyncResult(task_id)
-        
+
         # Check the state of the task
         if task_result.state == "PENDING":
             return Response({"success": False, "state": "PENDING", "progress": 0}, status=status.HTTP_202_ACCEPTED)
@@ -147,8 +161,8 @@ class RentalPropertyViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path='all-properties')
     def all_properties(self, request):
         # Fetch all rental properties
-        rental_properties = RentalProperty.objects.all().order_by('-created_at')
-        
+        rental_properties = self.get_queryset().order_by('-created_at')
+
         # Paginate the results
         paginator = RentalPropertyPagination()
         paginated_properties = paginator.paginate_queryset(rental_properties, request)
@@ -170,7 +184,7 @@ class RentalPropertyViewSet(viewsets.ModelViewSet):
         start_date = filters.get("start_date")
         end_date = filters.get("end_date")
 
-        rental_properties = RentalProperty.objects.all()  # Initialize the queryset
+        rental_properties = self.get_queryset()  # Initialize the queryset
         # print( '======')
         # print(rental_properties, '======')
         # Build the query
@@ -192,7 +206,7 @@ class RentalPropertyViewSet(viewsets.ModelViewSet):
                 start_date = datetime.strptime(start_date, '%B %d, %Y').date()
                 query &= Q(created_at__gte=start_date)
             except ValueError:
-                return Response({'detail': 'Invalid start date format. Use "Month day, year" (e.g., December 3, 2024).'}, 
+                return Response({'detail': 'Invalid start date format. Use "Month day, year" (e.g., December 3, 2024).'},
                                 status=status.HTTP_400_BAD_REQUEST)
 
         # Handle end_date
@@ -208,16 +222,16 @@ class RentalPropertyViewSet(viewsets.ModelViewSet):
             # end_date = datetime.now().date()
             end_date_str = datetime.now().strftime('%B %d, %Y')  # Convert current date to string
             end_date = datetime.strptime(end_date_str, '%B %d, %Y').date()  # Parse string back to date
-            
+
         # If any filters are provided, apply them; otherwise, return all records
         if query != Q():  # Only apply filtering if there are valid filters
             rental_properties = rental_properties.filter(query).order_by('-created_at')
         else:
             rental_properties = rental_properties.order_by('-created_at')  # No filters, return all
-        
+
         if self.request.user.is_staff:
             rental_properties = rental_properties.order_by('-created_at')
-        else:   
+        else:
             rental_properties = rental_properties.filter(user_id=self.request.user.id).order_by('-created_at')
 
         list_of_batch_ids = set()
@@ -231,7 +245,7 @@ class RentalPropertyViewSet(viewsets.ModelViewSet):
 
         # Serialize the results
         serializer = self.get_serializer(paginated_properties, many=True)
-        
+
         # Include max_batch_id in the response
         response_data = {
             'all_batch_ids': all_batch_ids,
@@ -239,7 +253,7 @@ class RentalPropertyViewSet(viewsets.ModelViewSet):
         }
 
         return paginator.get_paginated_response(response_data)
-    
+
     @action(detail=False, methods=['get'], url_path='download-csv')
     def download_csv(self, request):
         filters = request.query_params
@@ -250,7 +264,7 @@ class RentalPropertyViewSet(viewsets.ModelViewSet):
         start_date = filters.get("start_date")
         end_date = filters.get("end_date")
 
-        rental_properties = RentalProperty.objects.all()  # Initialize the queryset
+        rental_properties = self.get_queryset()  # Initialize the queryset
         query = Q()
 
         # Apply filters only if they are provided
@@ -268,7 +282,7 @@ class RentalPropertyViewSet(viewsets.ModelViewSet):
                 start_date = datetime.strptime(start_date, '%B %d, %Y').date()
                 query &= Q(created_at__gte=start_date)
             except ValueError:
-                return Response({'detail': 'Invalid start date format. Use "Month day, year" (e.g., December 3, 2024).'}, 
+                return Response({'detail': 'Invalid start date format. Use "Month day, year" (e.g., December 3, 2024).'},
                                 status=status.HTTP_400_BAD_REQUEST)
 
         if end_date:
@@ -288,7 +302,7 @@ class RentalPropertyViewSet(viewsets.ModelViewSet):
 
         if self.request.user.is_staff:
             rental_properties = rental_properties.order_by('-created_at')
-        else:   
+        else:
             rental_properties = rental_properties.filter(user_id=self.request.user.id).order_by('-created_at')
 
 
@@ -316,7 +330,7 @@ class RentalPropertyViewSet(viewsets.ModelViewSet):
                 "Occupancy Rate",
                 "Zillow Property Status"
             ]) + "\n"
-    
+
             # Yield data rows one by one
             for property in rental_properties:
                 # Escape the location field if necessary

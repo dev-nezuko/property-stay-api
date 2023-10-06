@@ -1,150 +1,85 @@
-Here's a `README.md` file tailored for your Django project, including the directory structure, installation instructions, and PostgreSQL database setup.
+# Property research backend
 
-```markdown
-# BnBU Backend API
+A Django REST backend for a property-research workflow: manage client/customer accounts, organize leases and document revisions, store model-generated rental-regulation notes, and process rental-property spreadsheets through a Celery worker.
 
-A Django-based backend API for managing user accounts with custom user types.
+The code connects several services, but it is a prototype rather than a verified property, legal or investment decision system. Model responses are not checked against current regulations or independent sources. No browser, retrieval or citation-verification tool is connected to the regulation prompt.
 
-## Directory Structure
+## Request flow
 
-```plaintext
-bnbu_backend_api/
-├── bnbu_backend_api/         # Main project directory
-│   ├── __init__.py
-│   ├── settings.py           # Project settings
-│   ├── urls.py               # URL configurations
-│   └── wsgi.py               # WSGI application
-├── account/                   # User account app
-│   ├── migrations/            # Database migrations
-│   ├── __init__.py
-│   ├── admin.py              # Admin interface configurations
-│   ├── apps.py               # App configurations
-│   ├── forms.py              # Custom forms for user creation
-│   ├── models.py             # Custom user model
-│   ├── tests.py              # Test cases
-│   ├── urls.py               # URL patterns for account-related views
-│   └── views.py              # Views for account management
-├── templates/                 # HTML templates
-│   └── accounts/              # Templates for account views
-│       ├── dashboard.html
-│       ├── login.html
-│       ├── password_reset.html
-│       ├── password_reset_confirm.html
-│       ├── profile.html
-│       └── register.html
-├── manage.py                  # Django management script
-├── requirements.txt           # Project dependencies
-└── .env                       # Environment variables
+```mermaid
+flowchart LR
+    Client[API client] --> API[Django REST + JWT]
+    API --> DB[(Database)]
+    API --> Queue[Celery / Redis]
+    Queue --> Rental[Spreadsheet enrichment]
+    Queue --> Documents[Document analysis]
+    Rental --> Providers[AirDNA / ClickUp]
+    Documents --> Model[OpenAI]
+    API -. demo uploads disabled by default .-> Storage[Cloudinary]
 ```
 
-## Installation and Setup
+Lease documents have revision numbers and analysis history. Rental rows carry a batch ID and an owning user ID. Ordinary accounts are restricted to their records; staff can administer records across owners. Customer management distinguishes staff from client accounts rather than trusting a user-supplied role label.
 
-### Prerequisites
+## Local setup
 
-- Python 3.11.10
-- PostgreSQL Database
-- Django
-- Virtual Environment (recommended)
+The requirements retain Django 5.1.2 and the existing provider SDK pins. Use an isolated Python environment; no blanket dependency migration was performed.
 
-### Steps
+```sh
+git clone https://github.com/dev-nezuko/property-stay-api.git
+cd property-stay-api
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+cp .env.example .env
+python -c 'import secrets; print("SECRET_KEY=" + secrets.token_urlsafe(48))' >> .env
+python manage.py migrate
+python manage.py createsuperuser
+python manage.py runserver
+```
 
-1. **Clone the repository**
+Development defaults to an ignored local SQLite database. Set `DATABASE_URL` to a private PostgreSQL connection string when testing PostgreSQL behavior; never copy a historical default password. Staging and production require their own database URL and host configuration. `.env` is read by the application and must stay untracked.
 
-   ```bash
-   git clone <repository_url>
-   cd bnbu_backend_api
-   ```
+For queued work, start a local Redis instance and then:
 
-2. **Create a virtual environment (optional but recommended)**
+```sh
+celery -A bnbu_backend_api.celery:app worker --loglevel=INFO
+```
 
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
-   ```
+Provider-backed actions require their own credentials and configuration. An account-only local run does not verify OpenAI, Cloudinary, AirDNA, ClickUp, Redis, email delivery or PostgreSQL. The existing `openai==0.28.0` calls use the older `ChatCompletion` interface; mixing in a new major SDK without adapting those calls will not work.
 
-3. **Install the dependencies**
+## API map
 
-   Make sure you're in the project's root directory (where `requirements.txt` is located):
+| Route | Purpose |
+| --- | --- |
+| `POST /api/token/` | Obtain JWTs with email and password |
+| `POST /api/token/refresh/` | Refresh an access token |
+| `/account/users/`, `/account/clients/` | Staff account administration |
+| `/account/clients/{id}/customers/` | Client/customer relationships |
+| `POST /account/users/update-password/{id}/` | Own-account first-login password update |
+| `/api/leases/`, `/api/documents/` | Lease records, document metadata and custom actions |
+| `/api/regulations/` | Saved model-generated location notes and chats |
+| `/api/rental_properties/` | Rental rows, batch processing and filtered exports |
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+Authenticated API requests use `Authorization: Bearer <access-token>`. For example, `GET /api/leases/` returns the current account's paginated leases; staff see all leases. These are JSON APIs. The old README's registration, dashboard and profile HTML walkthrough did not describe the implemented application accurately; several account HTML views still lack templates.
 
-4. **Setup the PostgreSQL Database**
+## Important boundaries
 
-   - Create a PostgreSQL database and user:
+- **Document uploads default off.** The legacy Cloudinary uploader makes files public. Do not enable `ENABLE_DOCUMENT_UPLOADS=1` for real leases or personal documents; that switch only permits synthetic demo files. Private storage, signed retrieval, upload validation and retention rules need a deliberate implementation first. Existing uploaded files are not made private by this code change.
+- **Password reset is unavailable.** The old endpoint returned reset links to the caller and had no complete confirmation flow. It now returns a uniform 503 without account enumeration or a token. Add verified delivery and a confirmation endpoint before enabling it.
+- **Task ownership has a time limit.** Rental task IDs are associated with their submitter in cache for 24 hours. Unassociated or expired tasks are staff-only. This is not a durable task-ownership ledger; database-backed ownership would be stronger.
+- **No verified research guarantee.** Regulation prompts ask for current research, but the code only sends prompts to a model. Uploaded document content and addresses can reach configured providers. Use synthetic data during demonstrations.
+- **Concurrency and recovery need more work.** Document version and batch ID allocation can race. Jobs lack a full durable recovery protocol, provider timeout coverage is uneven, and malformed provider responses need broader tests.
 
-     ```sql
-     CREATE DATABASE bnbu_db;  -- Replace with your desired database name
-     CREATE USER bnbu_user WITH PASSWORD 'your_password';  -- Replace with a secure password
-     ALTER ROLE bnbu_user SET client_encoding TO 'utf8';
-     ALTER ROLE bnbu_user SET default_transaction_isolation TO 'read committed';
-     ALTER ROLE bnbu_user SET timezone TO 'UTC';
-     GRANT ALL PRIVILEGES ON DATABASE bnbu_db TO bnbu_user;  -- Grant privileges to the user
-     ```
+Redis TLS connections now require certificate verification. If credentials from earlier history were ever deployed, rotate them at their providers; rewriting Git cannot revoke credentials or remove external copies.
 
-   - Update your `.env` file with the PostgreSQL credentials:
+## Checks
 
-     ```plaintext
-     DATABASE_NAME=bnbu_db
-     DATABASE_USER=bnbu_user
-     DATABASE_PASSWORD=your_password
-     DATABASE_HOST=localhost  # Or your PostgreSQL host
-     DATABASE_PORT=5432        # Default PostgreSQL port
-     ```
+```sh
+python manage.py test accounts lease rental regulations --settings=bnbu_backend_api.test_settings
+```
 
-5. **Configure the settings.py for PostgreSQL**
+The isolated settings module uses in-memory SQLite, a local cache, local email and test-only password hashing. Never deploy with it. Twenty focused tests cover account creation, first-login restrictions, customer permissions, tenant-filtered lists/searches, document access, disabled uploads and task ownership.
 
-   Ensure your `settings.py` file has the correct database settings. It should look something like this:
+The review ran those tests with Django 5.2 in an isolated environment, substituting a storage adapter that fails if called. It did not install the complete production dependency set or run live integrations. The repository's declared Django 5.1 environment remains to be verified. The existing CI workflow formats changed Python files against a hardcoded `origin/master` reference; it does not run this test suite. Improving it requires a token with workflow permissions.
 
-   ```python
-   DATABASES = {
-      'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'bnbu_backend_api_db',
-        'USER': 'bnbu_admin',
-        'PASSWORD': 'admin',
-        'HOST': 'localhost',  # Set to 'localhost' or '127.0.0.1'
-        'PORT': '',  # Leave empty for default port 5432
-      }
-   }
-   ```
-
-6. **Run migrations**
-
-   Apply database migrations to set up your models:
-
-   ```bash
-   python manage.py migrate
-   ```
-
-7. **Create a superuser (optional)**
-
-   If you want to access the Django admin interface, create a superuser:
-
-   ```bash
-   python manage.py createsuperuser
-   ```
-
-8. **Run the server**
-
-   Start the development server:
-
-   ```bash
-   python manage.py runserver
-   ```
-
-9. **Access the API**
-
-   Open your browser and navigate to `http://127.0.0.1:8000/account/` to access the API.
-
-## Usage
-
-You can interact with the API through the following endpoints:
-
-- **Dashboard**: `/account/`
-- **Register**: `/account/register/`
-- **Login**: `/account/login/`
-- **Profile**: `/account/profile/`
-- **Logout**: `/account/logout/`
-- **Password Reset**: `/account/password_reset/`
+`accounts/`, `lease/`, `regulations/` and `rental/` hold the domain code; `bnbu_constants/utility.py` contains spreadsheet and enrichment helpers. No license file is included.

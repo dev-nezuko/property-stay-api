@@ -19,7 +19,7 @@ from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
 from rest_framework.exceptions import PermissionDenied
 
-    
+
 class UserListCreateView(APIView):
     permission_classes = [IsAdminUser]
     pagination_class = PageNumberPagination
@@ -55,7 +55,7 @@ class UserDetailView(RetrieveUpdateDestroyAPIView):
 
     def delete(self, request, *args, **kwargs):
         response = super().delete(request, *args, **kwargs)
-        return Response({"message": "User deleted successfully"}, status=status.HTTP_204_NO_CONTENT) 
+        return Response({"message": "User deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
 
 class ClientListCreateView(APIView):
     permission_classes = [IsAdminUser]
@@ -71,7 +71,7 @@ class ClientListCreateView(APIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
+
 class ClientDetailView(RetrieveUpdateDestroyAPIView):
     queryset = CustomUser.objects.filter(user_type='client')
     serializer_class = UserSerializer
@@ -100,11 +100,11 @@ class CustomerListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, client_id=None):
-        if request.user.user_type == 'admin' and client_id is not None:
+        if request.user.is_staff and client_id is not None:
             # Admin views customers for a specific client
             client = get_object_or_404(CustomUser, id=client_id, user_type='client')
             customers = CustomUser.objects.filter(client=client, user_type='customer').order_by('id')
-        elif request.user.user_type == 'admin':
+        elif request.user.is_staff:
             # Admin gets all customers with valid client association
             customers = CustomUser.objects.filter(user_type='customer').exclude(client__isnull=True).order_by('id')
         else:
@@ -119,20 +119,21 @@ class CustomerCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, client_id):
-        # Admin specifies client, otherwise client ID is set as the request user's ID
-        if request.user.user_type == 'admin':
-            request.data['client'] = client_id
-        else:
-            request.data['client'] = request.user.id
-
+        if not request.user.is_staff and request.user.user_type != 'client':
+            raise PermissionDenied("Only staff or client accounts can create customers.")
+        if not request.user.is_staff and request.user.pk != client_id:
+            raise PermissionDenied("Cannot create customers for another client.")
+        client_user = get_object_or_404(CustomUser, pk=client_id, user_type='client')
+        data = request.data.copy()
+        data['client'] = client_user.pk
         # Ensure 'client' is present in the request data
-        if not request.data.get('client'):
+        if not data.get('client'):
             return Response({"error": "Client ID is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         # Use the correct serializer for creating a Customer
-        serializer = CustomerSerializer(data=request.data)
+        serializer = CustomerSerializer(data=data)
         if serializer.is_valid():
-            serializer.save()  # Save the new customer instance
+            serializer.save(client=client_user, user_type='customer')
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -142,18 +143,18 @@ class CustomerDetailView(RetrieveUpdateDestroyAPIView):
 
     def get_object(self):
         # Fetch customer using primary key (pk)
-        customer = get_object_or_404(CustomUser, pk=self.kwargs['pk'], user_type='customer')        
+        customer = get_object_or_404(CustomUser, pk=self.kwargs['pk'], client_id=self.kwargs['client_id'], user_type='customer')
         # Allow admins to access any customer
-        if self.request.user.user_type == 'admin':
-            return customer        
+        if self.request.user.is_staff:
+            return customer
         # Check if the customer is associated with the requesting client
         if customer.client != self.request.user:
-            raise PermissionDenied("You do not have permission to access this customer.")        
+            raise PermissionDenied("You do not have permission to access this customer.")
         return customer
 
     def put(self, request, *args, **kwargs):
         # Retrieve the customer and check permissions
-        customer = self.get_object()       
+        customer = self.get_object()
         # Update customer data using CustomerSerializer
         serializer = self.get_serializer(customer, data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -163,16 +164,17 @@ class CustomerDetailView(RetrieveUpdateDestroyAPIView):
 
     def delete(self, request, *args, **kwargs):
         # Retrieve the customer and check permissions
-        customer = self.get_object()       
+        customer = self.get_object()
         # Perform deletion
-        customer.delete()       
+        customer.delete()
         # Return a success message for deletion
         return Response({"message": "Customer deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
-    
+
 class FirstTimePasswordUpdateView(RetrieveUpdateAPIView):
     serializer_class = FirstTimePasswordUpdateSerializer  # Use the new serializer
     permission_classes = [IsAuthenticated]
     lookup_field = 'pk'
+    http_method_names = ["post", "options"]
 
     def get_queryset(self):
         return CustomUser.objects.all()
@@ -202,33 +204,14 @@ def password_change(request):
     if serializer.is_valid():
         serializer.save()
         return Response({"success": "Password changed successfully"}, status=status.HTTP_200_OK)
-    
+
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['POST'])
 def password_reset(request):
-    serializer = PasswordResetSerializer(data=request.data)
-    if serializer.is_valid():
-        email = serializer.validated_data['email']
-        user = CustomUser.objects.filter(email=email).first()
-        if user:
-            token = default_token_generator.make_token(user)
-            uid = urlsafe_base64_encode(force_bytes(user.pk))
-            reset_link = f"http://example.com/reset/{uid}/{token}/"
-            
-            # Simulating sending the reset email (shows in console)
-            send_mail(
-                "Password Reset",
-                f"Use this link to reset your password: {reset_link}",
-                "from@example.com",
-                [email],
-            )
-            
-            return Response({"message": "Password reset email sent", "reset_link": reset_link}, status=status.HTTP_200_OK)
-        else:
-            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
-    
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    # No reset confirmation endpoint or verified delivery flow exists yet.
+    return Response({"detail": "Password reset is unavailable until secure delivery and confirmation are configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
 class LoginView(APIView):
     def post(self, request):
         email = request.data.get('email')
@@ -250,7 +233,7 @@ class LogoutView(APIView):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def dashboard(request):
-    if request.user.user_type == 'admin':
+    if request.user.is_staff:
         users = CustomUser.objects.all()
         serializer = UserSerializer(users, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
